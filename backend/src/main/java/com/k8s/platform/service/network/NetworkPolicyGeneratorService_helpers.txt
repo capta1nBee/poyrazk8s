@@ -1,0 +1,65 @@
+    // Helper methods for topology edge-based rule extraction
+    
+    private String buildRuleKeyFromEdge(NetworkTopologyEdge edge, String direction) {
+        if ("ingress".equalsIgnoreCase(direction)) {
+            return String.format("%s|%s|%s|%d|%s",
+                    edge.getSourceNamespace() != null ? edge.getSourceNamespace() : "_external",
+                    edge.getSourceName(),
+                    edge.getTargetName(),
+                    edge.getPort(),
+                    edge.getProtocol());
+        } else {
+            return String.format("%s|%s|%s|%d|%s",
+                    edge.getSourceName(),
+                    edge.getTargetNamespace() != null ? edge.getTargetNamespace() : "_external",
+                    edge.getTargetName(),
+                    edge.getPort(),
+                    edge.getProtocol());
+        }
+    }
+
+    private NetworkPolicyRuleDTO buildRuleFromEdge(NetworkTopologyEdge edge, String direction) {
+        NetworkPolicyRuleDTO.NetworkPolicyRuleDTOBuilder builder = NetworkPolicyRuleDTO.builder()
+                .sourceNamespace(edge.getSourceNamespace())
+                .sourcePodName(edge.getSourceName())
+                .sourceKind(edge.getSourceType())
+                .destinationNamespace(edge.getTargetNamespace())
+                .destinationPodName(edge.getTargetName())
+                .destinationKind(edge.getTargetType())
+                .destinationPort(edge.getPort())
+                .protocol(edge.getProtocol())
+                .flowType(edge.getFlowType())
+                .serviceName(edge.getServiceName())
+                .serviceNamespace(edge.getServiceNamespace());
+
+        // Parse labels from JSON strings
+        if (edge.getSourceLabels() != null) {
+            try {
+                builder.sourcePodLabels(objectMapper.readValue(edge.getSourceLabels(),
+                        new TypeReference<Map<String, String>>() {}));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse source labels from edge", e);
+            }
+        }
+
+        if (edge.getTargetLabels() != null) {
+            try {
+                builder.destinationPodLabels(objectMapper.readValue(edge.getTargetLabels(),
+                        new TypeReference<Map<String, String>>() {}));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse target labels from edge", e);
+            }
+        }
+
+        if (edge.getBackendLabels() != null) {
+            try {
+                Map<String, String> backendLabels = objectMapper.readValue(edge.getBackendLabels(),
+                        new TypeReference<Map<String, String>>() {});
+                builder.backendPodLabels(backendLabels);
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse backend labels from edge", e);
+            }
+        }
+
+        return builder.build();
+    }

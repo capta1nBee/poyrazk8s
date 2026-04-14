@@ -1,0 +1,54 @@
+{
+  "name": "poyraz-kubernetes-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 5175 --host 0.0.0.0",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "lint": "eslint .",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.1.1",
+    "@fontsource/inter": "^5.1.1",
+    "@fontsource/jetbrains-mono": "^5.1.1",
+    "@fontsource/outfit": "^5.1.1",
+    "@fontsource/plus-jakarta-sans": "^5.1.1",
+    "@iconify-json/lucide": "^1.2.82",
+    "@iconify-json/simple-icons": "^1.2.63",
+    "@nuxt/ui": "^4.3.0",
+    "@guolao/vue-monaco-editor": "1.5.1",
+    "@unovis/ts": "^1.6.2",
+    "@unovis/vue": "^1.6.2",
+    "@vueuse/nuxt": "^14.1.0",
+    "axios": "^1.7.9",
+    "d3": "^7.9.0",
+    "date-fns": "^4.1.0",
+    "jspdf": "^4.0.0",
+    "jspdf-autotable": "^5.0.7",
+    "js-yaml": "^4.1.0",
+    "monaco-editor": "^0.52.2",
+    "nuxt": "^4.2.2",
+    "pinia": "^2.3.0",
+    "rrweb": "2.0.0-alpha.4",
+    "xlsx": "^0.18.5",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.12.1",
+    "@nuxt/fonts": "^0.10.3",
+    "@pinia/nuxt": "^0.9.0",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/d3": "^7.4.3",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.39.2",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.2.1"
+  },
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}

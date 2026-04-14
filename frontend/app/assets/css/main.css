@@ -1,0 +1,368 @@
+@import "tailwindcss" theme(static);
+@import "@nuxt/ui";
+
+/* Local fonts — bundled via @fontsource (no internet required) */
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/outfit/400.css";
+@import "@fontsource/outfit/500.css";
+@import "@fontsource/outfit/600.css";
+@import "@fontsource/outfit/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+@import "@fontsource/jetbrains-mono/700.css";
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/500.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/dm-sans/400.css";
+@import "@fontsource/dm-sans/500.css";
+@import "@fontsource/dm-sans/600.css";
+@import "@fontsource/dm-sans/700.css";
+
+@theme static {
+  /* Default font - Inter (Enterprise standard) */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Enterprise Color Palette - Slate & Blue */
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  --color-primary-950: #172554;
+
+  /* Success - Emerald */
+  --color-green-50: #ecfdf5;
+  --color-green-100: #d1fae5;
+  --color-green-200: #a7f3d0;
+  --color-green-300: #6ee7b7;
+  --color-green-400: #34d399;
+  --color-green-500: #10b981;
+  --color-green-600: #059669;
+  --color-green-700: #047857;
+  --color-green-800: #065f46;
+  --color-green-900: #064e3b;
+  --color-green-950: #022c22;
+
+  /* Neutral - Slate for enterprise feel */
+  --color-neutral-50: #f8fafc;
+  --color-neutral-100: #f1f5f9;
+  --color-neutral-200: #e2e8f0;
+  --color-neutral-300: #cbd5e1;
+  --color-neutral-400: #94a3b8;
+  --color-neutral-500: #64748b;
+  --color-neutral-600: #475569;
+  --color-neutral-700: #334155;
+  --color-neutral-800: #1e293b;
+  --color-neutral-900: #0f172a;
+  --color-neutral-950: #020617;
+}
+
+/* Global Styles */
+html {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  @apply bg-neutral-50 dark:bg-neutral-950;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Scrollbar - Enterprise Minimal */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-neutral-300 dark:bg-neutral-700 rounded-full;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-neutral-400 dark:bg-neutral-600;
+}
+
+/* Selection */
+::selection {
+  @apply bg-primary-500/20 text-primary-900 dark:text-primary-100;
+}
+
+/* Focus States - Enterprise Accessible */
+:focus-visible {
+  @apply outline-2 outline-offset-2 outline-primary-500;
+}
+
+/* Card Enhancements */
+.enterprise-card {
+  @apply bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800;
+  @apply shadow-sm hover:shadow-md transition-all duration-200;
+}
+
+/* Stat Cards */
+.stat-card {
+  @apply relative overflow-hidden;
+  @apply bg-gradient-to-br from-white to-neutral-50;
+  @apply dark:from-neutral-900 dark:to-neutral-950;
+  @apply border border-neutral-200/50 dark:border-neutral-800/50;
+  @apply rounded-2xl p-6;
+  @apply hover:border-primary-500/30 hover:shadow-lg hover:shadow-primary-500/5;
+  @apply transition-all duration-300 ease-out;
+}
+
+.stat-card::before {
+  content: '';
+  @apply absolute inset-0 opacity-0 transition-opacity duration-300;
+  background: radial-gradient(circle at top right, var(--tw-gradient-from) 0%, transparent 60%);
+}
+
+.stat-card:hover::before {
+  @apply opacity-100;
+}
+
+/* Table Enhancements */
+.enterprise-table {
+  @apply w-full text-sm;
+}
+
+.enterprise-table thead {
+  @apply bg-neutral-50 dark:bg-neutral-900;
+  @apply border-b border-neutral-200 dark:border-neutral-800;
+}
+
+.enterprise-table th {
+  @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider;
+  @apply text-neutral-500 dark:text-neutral-400;
+}
+
+.enterprise-table td {
+  @apply px-4 py-3 border-b border-neutral-100 dark:border-neutral-800/50;
+}
+
+.enterprise-table tbody tr {
+  @apply hover:bg-neutral-50 dark:hover:bg-neutral-900/50;
+  @apply transition-colors duration-150;
+}
+
+/* Badge Styles */
+.status-badge {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  @apply border;
+}
+
+.status-badge.success {
+  @apply bg-green-50 text-green-700 border-green-200;
+  @apply dark:bg-green-950/50 dark:text-green-400 dark:border-green-900;
+}
+
+.status-badge.warning {
+  @apply bg-amber-50 text-amber-700 border-amber-200;
+  @apply dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-900;
+}
+
+.status-badge.error {
+  @apply bg-red-50 text-red-700 border-red-200;
+  @apply dark:bg-red-950/50 dark:text-red-400 dark:border-red-900;
+}
+
+.status-badge.info {
+  @apply bg-blue-50 text-blue-700 border-blue-200;
+  @apply dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-900;
+}
+
+/* Button Enhancements */
+.btn-enterprise {
+  @apply font-medium tracking-tight;
+  @apply transition-all duration-200 ease-out;
+  @apply active:scale-[0.98];
+}
+
+.btn-enterprise-primary {
+  @apply bg-gradient-to-b from-primary-500 to-primary-600;
+  @apply hover:from-primary-400 hover:to-primary-500;
+  @apply text-white shadow-sm shadow-primary-500/25;
+  @apply hover:shadow-md hover:shadow-primary-500/30;
+}
+
+/* Input Enhancements */
+.input-enterprise {
+  @apply border-neutral-200 dark:border-neutral-800;
+  @apply focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20;
+  @apply placeholder:text-neutral-400 dark:placeholder:text-neutral-500;
+  @apply transition-all duration-200;
+}
+
+/* Sidebar Enhancements */
+.sidebar-enterprise {
+  @apply bg-gradient-to-b from-neutral-50 to-white;
+  @apply dark:from-neutral-950 dark:to-neutral-900;
+  @apply border-r border-neutral-200 dark:border-neutral-800;
+}
+
+/* Navigation Item */
+.nav-item {
+  @apply flex items-center gap-3 px-3 py-2 rounded-lg;
+  @apply text-neutral-600 dark:text-neutral-400;
+  @apply hover:bg-neutral-100 dark:hover:bg-neutral-800;
+  @apply hover:text-neutral-900 dark:hover:text-neutral-100;
+  @apply transition-all duration-150;
+}
+
+.nav-item.active {
+  @apply bg-primary-50 dark:bg-primary-950/50;
+  @apply text-primary-600 dark:text-primary-400;
+  @apply border-l-2 border-primary-500;
+}
+
+/* Modal Enhancements */
+.modal-enterprise {
+  @apply bg-white dark:bg-neutral-900;
+  @apply border border-neutral-200 dark:border-neutral-800;
+  @apply rounded-2xl shadow-2xl;
+}
+
+/* Loading Skeleton */
+.skeleton {
+  @apply animate-pulse bg-neutral-200 dark:bg-neutral-800 rounded;
+}
+
+/* Tooltip */
+.tooltip-enterprise {
+  @apply bg-neutral-900 dark:bg-neutral-100;
+  @apply text-white dark:text-neutral-900;
+  @apply text-xs font-medium px-2 py-1 rounded;
+  @apply shadow-lg;
+}
+
+/* Data Grid */
+.data-grid {
+  @apply grid gap-4;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+/* Metric Display */
+.metric-value {
+  @apply text-3xl font-bold tracking-tight;
+  @apply bg-gradient-to-r from-neutral-900 to-neutral-700;
+  @apply dark:from-neutral-100 dark:to-neutral-300;
+  @apply bg-clip-text text-transparent;
+}
+
+/* Code Block */
+.code-block {
+  @apply font-mono text-sm;
+  @apply bg-neutral-900 dark:bg-neutral-950;
+  @apply text-neutral-100;
+  @apply p-4 rounded-xl;
+  @apply border border-neutral-800;
+  @apply overflow-x-auto;
+}
+
+/* Quick Action Button */
+.quick-action {
+  @apply flex flex-col items-center gap-2 p-4;
+  @apply bg-white dark:bg-neutral-900;
+  @apply border border-neutral-200 dark:border-neutral-800;
+  @apply rounded-xl;
+  @apply hover:border-primary-500/50 hover:shadow-lg hover:shadow-primary-500/10;
+  @apply hover:-translate-y-0.5;
+  @apply transition-all duration-200 ease-out;
+  @apply cursor-pointer;
+}
+
+.quick-action .icon {
+  @apply w-10 h-10 rounded-xl;
+  @apply flex items-center justify-center;
+  @apply bg-primary-50 dark:bg-primary-950/50;
+  @apply text-primary-600 dark:text-primary-400;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out forwards;
+}
+
+/* Staggered animations */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* Glass Effect */
+.glass {
+  @apply backdrop-blur-xl;
+  @apply bg-white/80 dark:bg-neutral-900/80;
+  @apply border border-white/20 dark:border-neutral-800/50;
+}
+
+/* Gradient Text */
+.gradient-text {
+  @apply bg-gradient-to-r from-primary-600 via-primary-500 to-blue-500;
+  @apply dark:from-primary-400 dark:via-primary-300 dark:to-blue-400;
+  @apply bg-clip-text text-transparent;
+}
+
+/* Divider */
+.divider {
+  @apply h-px bg-gradient-to-r from-transparent via-neutral-200 to-transparent;
+  @apply dark:via-neutral-800;
+}
+
+/* Empty State */
+.empty-state {
+  @apply flex flex-col items-center justify-center py-16 px-4 text-center;
+}
+
+.empty-state .icon {
+  @apply w-16 h-16 mb-4 text-neutral-300 dark:text-neutral-700;
+}
+
+.empty-state .title {
+  @apply text-lg font-semibold text-neutral-900 dark:text-neutral-100;
+}
+
+.empty-state .description {
+  @apply mt-2 text-sm text-neutral-500 dark:text-neutral-400 max-w-md;
+}

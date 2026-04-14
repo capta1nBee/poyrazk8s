@@ -1,0 +1,114 @@
+server:
+  port: ${SERVER_PORT:8686}
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: k8s-platform
+  # Security
+  security:
+    user:
+      name: admin
+      password: admin
+
+# JWT Configuration
+
+# CORS Configuration
+cors:
+  allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:5173,http://10.200.56.20:5175}
+  allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
+  allowed-headers: "*"
+  allow-credentials: true
+  max-age: 3600
+
+# Kubernetes Configuration
+kubernetes:
+  default-timeout: 30
+  watch-reconnect-delay: 5
+  max-watch-retries: 10
+  enable-metrics: true
+  metrics-interval: 60
+  sync:
+    fixed-delay: 60000 # 10 minutes in milliseconds
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.k8s.platform: INFO
+    io.fabric8.kubernetes: INFO
+    org.springframework.security: INFO
+    org.hibernate.SQL: INFO
+    org.flywaydb: INFO
+    org.hibernate: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/k8s-platform.log
+    max-size: 10MB
+    max-history: 30
+
+# Management Endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# Application Configuration
+app:
+  name: Kubernetes Multi-Cluster Platform
+  version: 1.0.0
+  session-timeout: ${SESSION_TIMEOUT:3600} # 1 hour default
+  max-clusters: 50
+  watcher-refresh-interval: 30
+  enable-audit-log: true
+  audit-log-retention-days: 90
+  superadmin:
+    default-password: ${SUPERADMIN_PASSWORD:admin123}
+  agent-api-key: ${AGENT_API_KEY:poyraz-runtime-security-2026-agent-key}
+
+# Vulnerability Scanning Configuration
+vulnerability:
+  scan:
+    path: ${VULN_SCAN_PATH:trivy}
+    cache-dir: ${VULN_SCAN_CACHE:/app/trivy-cache}
+    cron: ${VULN_SCAN_CRON:0 * * * * *} # Default: every hour
+    template-path: ${VULN_SCAN_TEMPLATE_PATH:/data/apps/trivy/contrib/gitlab.tpl}
+    db-repository: ${VULN_SCAN_DB_REPO:ghcr.io/aquasecurity/trivy-db}
+    offline-mode: ${VULN_SCAN_OFFLINE:false}
+
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-change-this-in-production}
+  expiration: ${JWT_EXPIRATION:3600000} # 1 hour in milliseconds
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:86400000} # 24 hours in milliseconds
+
+# ClusterEye Security Scanner
+cluster:
+  eye:
+    scan-interval-ms: ${CLUSTER_EYE_SCAN_INTERVAL_MS:300000} # 5 minutes default
+
+# Pod Metrics Collection & Retention
+pod-metrics:
+  collect-interval-ms: ${POD_METRICS_COLLECT_INTERVAL_MS:30000}   # 30 seconds default
+  retention-days: ${POD_METRICS_RETENTION_DAYS:7}                  # 7 days default
+  purge-interval-ms: ${POD_METRICS_PURGE_INTERVAL_MS:60000}       # 1 minute purge cycle
+
+# Network Configuration
+network:
+  flow:
+    retention-minutes: ${NETWORK_FLOW_RETENTION:15}
+    purge-batch-size: ${NETWORK_FLOW_PURGE_BATCH_SIZE:5000}
+    # Milliseconds to wait between idle purge cycles (only used when no backlog exists)
+    purge-interval-ms: ${NETWORK_FLOW_PURGE_INTERVAL_MS:30000}
+  policy:
+    policy-labels: ${POLICY_LABELS:app,uygulama,deploy,project,deneme}
+
+# Backup Configuration
+backup:
+  base-path: ${BACKUP_BASE_PATH:/tmp/k8s-backup}
