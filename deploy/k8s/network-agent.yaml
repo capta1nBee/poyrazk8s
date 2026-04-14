@@ -1,0 +1,173 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: poyraz-network-observability
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: http-tracer
+  namespace: poyraz-network-observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: http-tracer
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "nodes", "endpoints", "namespaces"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: http-tracer
+subjects:
+- kind: ServiceAccount
+  name: http-tracer
+  namespace: poyraz-network-observability
+roleRef:
+  kind: ClusterRole
+  name: http-tracer
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: http-tracer-config
+  namespace: poyraz-network-observability
+data:
+  config.yaml: |
+    interfaces:
+      - name: "lxc*"
+      - name: "cil*"
+      - name: "ens192"
+      - name: "cni0"
+    filters:
+      exclude_port:
+        - "1025"
+      exclude_ips: 
+        - "10.245.0.114/32"
+        - "10.245.2.107/32" 
+        - "10.245.3.35/32"
+        - "10.245.1.87/32"
+        - "10.247.0.1/32"
+        - "10.247.1.1/32"
+        - "10.247.2.1/32"
+        - "10.247.3.1/32"
+        - "10.247.4.1/32"
+        - "10.247.5.1/32"
+        - "10.247.6.1/32"
+        - "10.247.7.1/32"
+        - "10.247.8.1/32"
+        - "10.247.9.1/32"
+        - "10.247.10.1/32"
+        - "10.247.11.1/32"
+        - "10.247.12.1/32"
+        - "10.247.13.1/32"
+        - "10.247.14.1/32"
+        - "10.247.15.1/32"
+        - "10.247.16.1/32"
+        - "10.247.17.1/32"
+        - "10.247.18.1/32"
+        - "10.247.0.0/32"
+        - "10.247.1.0/32"
+        - "10.247.2.0/32"
+        - "10.247.3.0/32"
+        - "10.247.4.0/32"
+        - "10.247.5.0/32"
+        - "10.247.6.0/32"
+        - "10.247.7.0/32"
+        - "10.247.8.0/32"
+        - "10.247.9.0/32"
+        - "10.247.10.0/32"
+        - "10.247.11.0/32"
+        - "10.247.12.0/32"
+        - "10.247.13.0/32"
+        - "10.247.14.0/32"
+        - "10.247.15.0/32"
+        - "10.247.16.0/32"
+        - "10.247.17.0/32"
+        - "10.247.18.0/32" 
+      exclude_tcp_flags: []
+      exclude_namespaces: ["kube-system"]
+      exclude_pod_prefixes: ["rook-", "jaeger-"]
+      only_kubernetes_pod_ips: false
+      only_kubernetes_service_ips: false
+    
+    kubernetes:
+      enabled: true
+      config_path: null
+      sync_interval: 60
+    
+    processing:
+      print_to_console: false
+    
+    exporter:
+      enabled: true
+      http_endpoint: "BACKEND_IP:8686"
+      buffer_size: 100
+      timeout: 30
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: http-tracer
+  namespace: poyraz-network-observability
+  labels:
+    app: http-tracer
+spec:
+  selector:
+    matchLabels:
+      name: http-tracer
+  template:
+    metadata:
+      labels:
+        name: http-tracer
+    spec:
+      serviceAccountName: http-tracer
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: http-tracer
+        image: ghcr.io/capta1nbee/poyrazk8s:networkagent
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_RESOURCE
+            - BPF
+            - NET_ADMIN
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: config
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+        - name: sys-debug
+          mountPath: /sys/kernel/debug
+          readOnly: false
+        - name: sys-fs-cgroup
+          mountPath: /sys/fs/cgroup
+          readOnly: true
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: http-tracer-config
+      - name: sys-debug
+        hostPath:
+          path: /sys/kernel/debug
+      - name: sys-fs-cgroup
+        hostPath:
+          path: /sys/fs/cgroup
+      - name: modules
+        hostPath:
+          path: /lib/modules

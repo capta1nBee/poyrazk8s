@@ -1,0 +1,212 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: poyraz-runtime-security
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runtime-security-config
+  namespace: poyraz-runtime-security
+data:
+  # Application
+  APP_NAME: "runtime-security"
+  VERSION: "2.0.0"
+  ENVIRONMENT: "production"
+  
+  # Backend API
+  # Use the internal service name of the backend
+  BACKEND__BASE_URL: "http://BACKEND_IP:8686"
+  BACKEND__TIMEOUT: "10"
+  BACKEND__AGENT_API_KEY: "poyraz-runtime-security-2026-agent-key"
+  BACKEND__RULES_PATH: "/api/securityrules/rules"
+  BACKEND__CONFIG_PATH: "/api/securityrules/monitoring-config"
+  BACKEND__ALERTS_PATH: "/api/securityrules/alerts"
+
+  # Event Monitoring Configuration
+  # Enable specific syscall monitoring (default: false)
+  ENABLE_EXECVE: "false"
+  ENABLE_CLONE: "false"
+  ENABLE_FORK: "false"
+  ENABLE_CONNECT: "false"
+  ENABLE_BIND: "false"
+  ENABLE_OPEN: "false"
+  ENABLE_OPENAT: "false"
+  ENABLE_WRITE: "false"
+  ENABLE_UNLINK: "false"
+  ENABLE_UNLINKAT: "false"
+  ENABLE_LINK: "false"
+  ENABLE_RENAME: "false"
+  ENABLE_MKDIR: "false"
+  ENABLE_RMDIR: "false"
+  ENABLE_XATTR: "false"
+  
+  # eBPF Configuration
+  EBPF__BUFFER_PAGES: "512"
+  EBPF__POLL_TIMEOUT: "50"
+  
+  # Alert configuration
+  ALERTS__DEDUPLICATION_WINDOW: "300"
+  ALERTS__RATE_LIMIT_PER_POD: "10"
+  ALERTS__RATE_LIMIT_PER_NAMESPACE: "100"
+  ALERTS__WEBHOOK_ENABLED: "false"
+  ALERTS__WEBHOOK_URL: ""  # Set if webhook enabled
+  
+  # Rule configuration
+  RULES__RULES_DIRECTORY: "/tmp/rules"
+  RULES__RELOAD_INTERVAL: "60"
+  RULES__ENABLE_HOT_RELOAD: "true"
+  
+  # Security configuration
+  SECURITY__EXCLUDED_NAMESPACES: "poyraz-runtime-security,kube-public,kube-node-lease"
+  
+  # Observability configuration
+  OBSERVABILITY__LOG_LEVEL: "INFO"
+  OBSERVABILITY__LOG_FORMAT: "json"
+  OBSERVABILITY__METRICS_ENABLED: "true"
+  OBSERVABILITY__METRICS_PORT: "8080"
+  OBSERVABILITY__HEALTH_CHECK_ENABLED: "true"
+  
+  # Kubernetes configuration
+  KUBERNETES__IN_CLUSTER: "true"
+  KUBERNETES__POD_CACHE_REFRESH_INTERVAL: "600"
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: runtime-security
+  namespace: poyraz-runtime-security
+  labels:
+    app: runtime-security
+    version: "2.0.0"
+spec:
+  selector:
+    matchLabels:
+      app: runtime-security
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: runtime-security
+        version: "2.0.0"
+    spec:
+      serviceAccountName: runtime-security
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: runtime-security
+        image: ghcr.io/capta1nbee/poyrazk8s:securityagent
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_RESOURCE
+            - SYS_PTRACE
+            - NET_ADMIN
+        env:
+        # Node/Pod info
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # Configuration from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: runtime-security-config
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+        - name: cgroup
+          mountPath: /sys/fs/cgroup
+          readOnly: true
+        - name: debugfs
+          mountPath: /sys/kernel/debug
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: usr-src
+          mountPath: /usr/src
+          readOnly: true 
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      - name: cgroup
+        hostPath:
+          path: /sys/fs/cgroup
+          type: Directory
+      - name: debugfs
+        hostPath:
+          path: /sys/kernel/debug
+          type: Directory
+      - name: lib-modules
+        hostPath:
+            path: /lib/modules
+            type: Directory
+      - name: usr-src
+        hostPath:
+            path: /usr/src
+            type: Directory
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: runtime-security
+  namespace: poyraz-runtime-security
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: runtime-security
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: runtime-security
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: runtime-security
+subjects:
+- kind: ServiceAccount
+  name: runtime-security
+  namespace: poyraz-runtime-security

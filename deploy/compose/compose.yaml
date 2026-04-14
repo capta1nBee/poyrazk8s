@@ -1,0 +1,112 @@
+version: "3.8"
+
+services:
+  # Docker-in-Docker
+  dind:
+    image: docker:dind
+    container_name: dind
+    privileged: true
+    restart: unless-stopped
+    command: ["--storage-driver=overlay2", "--host=tcp://0.0.0.0:2375"]
+    environment:
+      - DOCKER_TLS_CERTDIR=
+    networks:
+      - app-network
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=k8s_platform
+      - POSTGRES_USER=k8s_user
+      - POSTGRES_PASSWORD=admin123postgres
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U k8s_user -d k8s_platform"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Backend
+  platform-backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    image: poyraz-k8s-backend:latest
+    container_name: backend
+    ports:
+      - "8686:8686"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - POSTGRES_USER=k8s_user
+      - POSTGRES_PASSWORD=admin123postgres
+      - POSTGRES_DB=k8s_platform
+      - SERVER_PORT=8686
+      - CORS_ORIGINS=*
+      - SUPERADMIN_PASSWORD=admin123
+      - VULN_SCAN_PATH=trivy
+      - VULN_SCAN_CACHE=/app/trivy-cache
+      - VULN_SCAN_CRON=0 * * * * *
+      - VULN_SCAN_TEMPLATE_PATH=/app/gitlab.tpl
+      - VULN_SCAN_DB_REPO=ghcr.io/aquasecurity/trivy-db
+      - VULN_SCAN_OFFLINE=true
+      - POLICY_LABELS=app,uygulama,deploy,project
+      - NETWORK_FLOW_RETENTION=15
+      - NETWORK_FLOW_PURGE_CRON=0 */15 * * * *
+      - NETWORK_FLOW_PURGE_BATCH_SIZE=5000
+      - DOCKER_HOST=tcp://dind:2375
+      - CLUSTER_EYE_SCAN_INTERVAL_MS=300000
+      - POD_METRICS_COLLECT_INTERVAL_MS=30000
+      - POD_METRICS_RETENTION_DAYS=7
+      - POD_METRICS_PURGE_INTERVAL_MS=60000
+      - BACKUP_BASE_PATH=/app/data/k8s-backup
+      - AGENT_API_KEY=poyraz-runtime-security-2026-agent-key
+    depends_on:
+      - dind
+    volumes:
+      - ./k8s:/app/data
+      - ./log:/app/logs
+    networks:
+      - app-network
+
+  # Frontend
+  platform-frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    image: poyraz-k8s-frontend:latest
+    container_name: frontend
+    ports:
+      - "8787:8787"
+    environment:
+      - NUXT_PUBLIC_API_BASE=http://poyraz.k8s.com:30025/api   
+    depends_on:
+      - platform-backend
+    networks:
+      - app-network
+
+  # NGINX Reverse Proxy
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "30025:30025"
+    volumes:
+      - ../../frontend/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - platform-backend
+      - platform-frontend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
