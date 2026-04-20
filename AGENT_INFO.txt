@@ -1,5 +1,0 @@
-
-You can access the poyrazk8s agent images like this.
-
-SECURITY_AGENT --> docker pull ghcr.io/capta1nbee/poyrazk8s:securityagent
-NETWORK_AGENT --> docker pull ghcr.io/capta1nbee/poyrazk8s:networkagent
