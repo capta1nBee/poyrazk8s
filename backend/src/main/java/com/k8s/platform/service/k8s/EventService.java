@@ -37,10 +37,12 @@ public class EventService {
 
         KubernetesClient client = clusterContextManager.getClient(clusterUid);
 
-        List<Event> events = client.v1().events()
-                .inNamespace(namespace)
-                .list()
-                .getItems()
+        // For cluster-scoped resources (namespace == null), search across all namespaces
+        List<Event> allEvents = (namespace == null || namespace.isBlank())
+                ? client.v1().events().inAnyNamespace().list().getItems()
+                : client.v1().events().inNamespace(namespace).list().getItems();
+
+        List<Event> events = allEvents
                 .stream()
                 .filter(event -> {
                     if (event.getInvolvedObject() == null || event.getInvolvedObject().getKind() == null) {

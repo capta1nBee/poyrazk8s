@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import type { Job } from '~/types/kubernetes'
 
 const clusterStore = useClusterStore()
 const k8s = useKubernetes()
 const toast = useToast()
 const { hasPermission, loading: permissionsLoading, filterByName } = usePagePermissions('Job')
 
-const jobs = ref<Job[]>([])
+const jobs = ref<any[]>([])
 const filteredJobs = computed(() => filterByName(jobs.value))
 const loading = ref(false)
 const includeDeleted = ref(false)
@@ -24,15 +23,66 @@ const columns = [
   { id: 'actions', key: 'actions', label: 'Actions' }
 ]
 
+/**
+ * Parse a date value that may come as ISO string or LocalDateTime array [y,m,d,h,min,s].
+ */
+function parseDate(value: any): Date | null {
+  if (!value) return null
+  if (typeof value === 'string') {
+    const d = new Date(value)
+    return isNaN(d.getTime()) ? null : d
+  }
+  if (Array.isArray(value) && value.length >= 3) {
+    // [year, month (1-based), day, hour, minute, second, nano]
+    const [y, mo, d, h = 0, mi = 0, s = 0] = value
+    return new Date(y, mo - 1, d, h, mi, s)
+  }
+  return null
+}
+
+function formatDuration(startRaw: any, endRaw: any): string {
+  const start = parseDate(startRaw)
+  const end = parseDate(endRaw) ?? new Date()
+  if (!start) return '-'
+  const ms = end.getTime() - start.getTime()
+  if (ms < 0) return '-'
+  const totalSecs = Math.floor(ms / 1000)
+  const days = Math.floor(totalSecs / 86400)
+  const hours = Math.floor((totalSecs % 86400) / 3600)
+  const mins = Math.floor((totalSecs % 3600) / 60)
+  const secs = totalSecs % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${mins}m`
+  if (mins > 0) return `${mins}m ${secs}s`
+  return `${secs}s`
+}
+
+function formatAge(createdAtRaw: any): string {
+  const created = parseDate(createdAtRaw)
+  if (!created) return '-'
+  const ms = Date.now() - created.getTime()
+  const days = Math.floor(ms / 86400000)
+  const hours = Math.floor((ms % 86400000) / 3600000)
+  const mins = Math.floor((ms % 3600000) / 60000)
+  if (days > 0) return `${days}d`
+  if (hours > 0) return `${hours}h`
+  return `${mins}m`
+}
+
 const fetchJobs = async () => {
   if (!selectedCluster.value) return
   if (permissionsLoading.value) return
   if (!hasPermission('view')) return
-  
+
   loading.value = true
   try {
-    const data = await k8s.fetchJobs(undefined, includeDeleted.value)
-    jobs.value = data || []
+    const raw = await k8s.fetchJobs(undefined, includeDeleted.value)
+    jobs.value = (raw || []).map((job: any) => ({
+      ...job,
+      completions: `${job.succeeded ?? 0}/${job.completions ?? 1}`,
+      duration: formatDuration(job.startTime, job.completionTime),
+      age: formatAge(job.k8sCreatedAt || job.createdAt)
+    }))
   } catch (error: any) {
     toast.add({
       title: 'Failed to fetch jobs',

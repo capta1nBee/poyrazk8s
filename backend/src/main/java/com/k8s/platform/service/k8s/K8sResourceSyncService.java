@@ -1,9 +1,13 @@
 package com.k8s.platform.service.k8s;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.k8s.platform.domain.entity.Cluster;
 import com.k8s.platform.domain.entity.k8s.*;
 import com.k8s.platform.domain.entity.k8s.BaseK8sEntity;
+import com.k8s.platform.domain.entity.network.GeneratedNetworkPolicy;
+import com.k8s.platform.domain.repository.ClusterRepository;
 import com.k8s.platform.domain.repository.k8s.*;
+import com.k8s.platform.domain.repository.network.GeneratedNetworkPolicyRepository;
 import io.fabric8.kubernetes.api.model.NodeAddress;
 
 import io.fabric8.kubernetes.api.model.ObjectMeta;
@@ -76,6 +80,10 @@ public class K8sResourceSyncService {
 
     // Autoscaling
     private final HpaRepository hpaRepository;
+
+    // Network Policy Generator sync
+    private final GeneratedNetworkPolicyRepository generatedNetworkPolicyRepository;
+    private final ClusterRepository clusterRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -2526,6 +2534,23 @@ public class K8sResourceSyncService {
             hpaRepository.save(entity);
             log.info("Successfully marked HPA {} as deleted in DB", uid);
         }, () -> log.warn("Failed to mark HPA {} as deleted: not found in DB", uid));
+    }
+
+    @Transactional
+    public void markGeneratedNetworkPolicyDeleted(Long clusterId, String namespace, String name) {
+        if (namespace == null || name == null) return;
+        Cluster cluster = clusterRepository.findById(clusterId).orElse(null);
+        if (cluster == null || cluster.getUid() == null) return;
+
+        generatedNetworkPolicyRepository
+                .findByClusterUidAndNamespaceAndName(cluster.getUid(), namespace, name)
+                .ifPresent(policy -> {
+                    if ("deleted".equals(policy.getStatus())) return;
+                    policy.setStatus("deleted");
+                    generatedNetworkPolicyRepository.save(policy);
+                    log.info("Generated network policy {}/{} marked as deleted after cluster deletion",
+                            namespace, name);
+                });
     }
 
 }

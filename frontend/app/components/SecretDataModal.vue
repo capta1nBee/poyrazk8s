@@ -71,7 +71,7 @@ watch(isOpen, async (open) => {
       loading.value = false
     }
   }
-})
+}, { immediate: true })
 </script>
 
 <template>

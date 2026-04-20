@@ -609,7 +609,7 @@ onMounted(async () => {
                   v-model="entry.pageKey"
                   :items="pageOptions.map(p => ({ label: p.displayName || p.name, value: p.name, icon: p.icon, suffix: SUPERADMIN_ONLY_PAGES.has(p.name) ? '🔒 Superadmin Only' : undefined }))"
                   value-key="value" label-key="label"
-                  placeholder="Sayfa seçin…"
+                  placeholder="Page Selector…"
                   class="flex-1"
                   @update:model-value="onPageEntryChange(entry)"
                 />
@@ -707,7 +707,7 @@ onMounted(async () => {
     <template #body>
       <div class="space-y-4 p-1">
         <UFormField label="Username" required>
-          <UInput v-model="userForm.username" placeholder="johndoe, alice, …" class="w-full" autofocus />
+          <UInput v-model="userForm.username" placeholder="username" class="w-full" autofocus />
         </UFormField>
         <UFormField label="Cluster(s)" hint="Which clusters should this role be active on?">
           <div class="mt-1 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700 overflow-hidden">

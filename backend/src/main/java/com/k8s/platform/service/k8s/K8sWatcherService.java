@@ -89,6 +89,7 @@ public class K8sWatcherService {
                 watchResource(cluster, "VolumeAttachments", client.storage().v1().volumeAttachments());
                 watchResource(cluster, "ReplicationControllers", client.replicationControllers().inAnyNamespace());
                 watchResource(cluster, "HPAs", client.autoscaling().v2().horizontalPodAutoscalers().inAnyNamespace());
+                watchResource(cluster, "NetworkPolicies", client.network().v1().networkPolicies().inAnyNamespace());
 
                 // Watch optional/alpha APIs with error handling
                 try {
@@ -198,6 +199,10 @@ public class K8sWatcherService {
                 case "VolumeAttachments" -> k8sResourceSyncService.markVolumeAttachmentDeleted(uid);
                 case "ReplicationControllers" -> k8sResourceSyncService.markReplicationControllerDeleted(uid);
                 case "HPAs" -> k8sResourceSyncService.markHpaDeleted(uid);
+                case "NetworkPolicies" -> k8sResourceSyncService.markGeneratedNetworkPolicyDeleted(
+                        clusterId,
+                        resource.getMetadata().getNamespace(),
+                        resource.getMetadata().getName());
                 default -> log.warn("Deletion sync not implemented for resource type: {}", resourceType);
             }
         } else {

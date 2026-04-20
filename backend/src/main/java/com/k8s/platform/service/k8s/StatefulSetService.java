@@ -69,6 +69,22 @@ public class StatefulSetService {
                                 .withName(name)
                                 .scale(replicas);
 
+                // Immediately update DB so the UI reflects the new replica count
+                // before the watcher MODIFIED event arrives.
+                try {
+                        Cluster cluster = clusterRepository.findByUid(clusterUid)
+                                        .orElseThrow(() -> new RuntimeException("Cluster not found: " + clusterUid));
+                        statefulSetRepository
+                                        .findByClusterIdAndNamespaceAndNameAndIsDeletedFalse(cluster.getId(), namespace,
+                                                        name)
+                                        .ifPresent(ss -> {
+                                                ss.setReplicas(replicas);
+                                                statefulSetRepository.save(ss);
+                                        });
+                } catch (Exception e) {
+                        log.warn("Could not eagerly update StatefulSet replica count in DB: {}", e.getMessage());
+                }
+
                 log.info("StatefulSet scaled successfully: {}/{} to {} replicas", namespace, name, replicas);
         }
 

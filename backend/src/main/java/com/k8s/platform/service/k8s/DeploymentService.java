@@ -69,6 +69,22 @@ public class DeploymentService {
                                 .withName(name)
                                 .scale(replicas);
 
+                // Immediately update DB so the UI reflects the new replica count
+                // before the watcher MODIFIED event arrives.
+                try {
+                        Cluster cluster = clusterRepository.findByUid(clusterUid)
+                                        .orElseThrow(() -> new RuntimeException("Cluster not found: " + clusterUid));
+                        deploymentRepository
+                                        .findByClusterIdAndNamespaceAndNameAndIsDeletedFalse(cluster.getId(), namespace,
+                                                        name)
+                                        .ifPresent(d -> {
+                                                d.setReplicas(replicas);
+                                                deploymentRepository.save(d);
+                                        });
+                } catch (Exception e) {
+                        log.warn("Could not eagerly update deployment replica count in DB: {}", e.getMessage());
+                }
+
                 log.info("Deployment scaled successfully: {}/{} to {} replicas", namespace, name, replicas);
         }
 

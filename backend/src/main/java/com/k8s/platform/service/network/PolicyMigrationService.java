@@ -111,26 +111,29 @@ public class PolicyMigrationService {
                 .findByPolicyIdAndVersion(policyId, targetVersion)
                 .orElseThrow(() -> new RuntimeException("Version " + targetVersion + " not found"));
 
-        if (targetMigration.getNewYaml() == null) {
-            throw new RuntimeException("Cannot rollback to a delete action");
+        // Rolling back "on" a version means undoing that version's change,
+        // i.e. restoring its previousYaml. Create/apply actions have no prior state.
+        if (targetMigration.getPreviousYaml() == null) {
+            throw new RuntimeException("Cannot rollback version " + targetVersion
+                    + ": no previous state recorded");
         }
 
         String currentYaml = policy.getYamlContent();
-        String targetYaml = targetMigration.getNewYaml();
+        String targetYaml = targetMigration.getPreviousYaml();
 
-        // Update the policy with the target version's YAML
+        // Update the policy with the target version's previous YAML (undo that version)
         policy.setYamlContent(targetYaml);
         policy.setStatus("draft"); // Mark as draft since it needs to be re-applied
         policyRepository.save(policy);
 
-        // Mark intermediate migrations as rolled back
-        List<NetworkPolicyMigration> laterMigrations = migrationRepository
+        // Mark the target migration and any later ones as rolled back
+        List<NetworkPolicyMigration> affectedMigrations = migrationRepository
                 .findByPolicyIdOrderByVersionDesc(policyId)
                 .stream()
-                .filter(m -> m.getVersion() > targetVersion && m.getRollbackAt() == null)
+                .filter(m -> m.getVersion() >= targetVersion && m.getRollbackAt() == null)
                 .collect(Collectors.toList());
 
-        for (NetworkPolicyMigration m : laterMigrations) {
+        for (NetworkPolicyMigration m : affectedMigrations) {
             m.setRollbackAt(LocalDateTime.now());
             m.setRolledBackBy(username);
             migrationRepository.save(m);
@@ -142,10 +145,10 @@ public class PolicyMigrationService {
                 "rollback",
                 currentYaml,
                 targetYaml,
-                "Rolled back to version " + targetVersion,
+                "Rolled back version " + targetVersion,
                 username);
 
-        log.info("Rolled back policy {} to version {}", policy.getName(), targetVersion);
+        log.info("Rolled back policy {} on version {}", policy.getName(), targetVersion);
         return convertToDTO(rollbackMigration, policy);
     }
 
@@ -265,7 +268,7 @@ public class PolicyMigrationService {
                 .rollbackAt(migration.getRollbackAt())
                 .rolledBackBy(migration.getRolledBackBy())
                 .createdAt(migration.getCreatedAt())
-                .canRollback(migration.getRollbackAt() == null && migration.getNewYaml() != null)
+                .canRollback(migration.getRollbackAt() == null && migration.getPreviousYaml() != null)
                 .diffSummary(getDiffSummary(migration.getPreviousYaml(), migration.getNewYaml()))
                 .build();
         

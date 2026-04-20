@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { EndpointSlice } from '~/types/endpointslice'
 
 const clusterStore = useClusterStore()
+const k8s = useKubernetes()
 const toast = useToast()
 const { hasPermission, loading: permissionsLoading, filterByName } = usePagePermissions('EndpointSlice')
 
-const endpointSlices = ref<EndpointSlice[]>([])
+const endpointSlices = ref<any[]>([])
 const filteredEndpointSlices = computed(() => filterByName(endpointSlices.value))
 const loading = ref(false)
 
@@ -23,26 +23,44 @@ const columns = [
   { id: 'actions', key: 'actions', label: 'Actions' }
 ]
 
+const formatAge = (createdAt: string) => {
+  if (!createdAt) return '-'
+  const now = new Date()
+  const created = new Date(createdAt)
+  const diff = now.getTime() - created.getTime()
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+  if (days > 0) return `${days}d`
+  if (hours > 0) return `${hours}h`
+  return '<1h'
+}
+
+/** Safely parse a JSON string; return fallback on error */
+function tryParseJson(value: any, fallback: any = null) {
+  if (value == null) return fallback
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
 const fetchEndpointSlices = async () => {
   if (!selectedCluster.value || !hasPermission('view')) return
 
   loading.value = true
   try {
-    const endpoint = selectedNamespace.value 
-      ? `/api/clusters/${selectedCluster.value.uid}/namespaces/${selectedNamespace.value}/endpointslices`
-      : `/api/clusters/${selectedCluster.value.uid}/endpointslices`
-    
-    const { data } = await useFetch(endpoint)
-    endpointSlices.value = (data.value || []).map((es: any) => ({
-      ...es,
-      name: es.metadata?.name || es.name,
-      namespace: es.metadata?.namespace || es.namespace,
-      serviceName: es.metadata?.labels?.['kubernetes.io/service-name'] || '-',
-      addressType: es.addressType || 'IPv4',
-      endpoints: es.endpoints?.length || 0,
-      ports: es.ports?.length || 0,
-      age: formatAge(es.metadata?.creationTimestamp || es.createdAt || '')
-    }))
+    const raw = await k8s.fetchResources<any>('EndpointSlice', selectedNamespace.value || undefined)
+    endpointSlices.value = (raw || []).map((es: any) => {
+      const labels = tryParseJson(es.labels, {})
+      const endpointsList = tryParseJson(es.endpoints, [])
+      const portsList = tryParseJson(es.ports, [])
+      return {
+        ...es,
+        serviceName: labels?.['kubernetes.io/service-name'] || '-',
+        addressType: es.addressType || 'IPv4',
+        endpoints: Array.isArray(endpointsList) ? endpointsList.length : 0,
+        ports: Array.isArray(portsList) ? portsList.length : 0,
+        age: formatAge(es.k8sCreatedAt || es.createdAt || '')
+      }
+    })
   } catch (error: any) {
     toast.add({
       title: 'Failed to fetch endpoint slices',
@@ -54,19 +72,6 @@ const fetchEndpointSlices = async () => {
   }
 }
 
-const formatAge = (createdAt: string) => {
-  if (!createdAt) return '-'
-  const now = new Date()
-  const created = new Date(createdAt)
-  const diff = now.getTime() - created.getTime()
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  
-  if (days > 0) return `${days}d`
-  if (hours > 0) return `${hours}h`
-  return '<1h'
-}
-
 watch([selectedCluster, selectedNamespace], () => {
   if (!permissionsLoading.value) {
     fetchEndpointSlices()
@@ -74,8 +79,8 @@ watch([selectedCluster, selectedNamespace], () => {
 }, { immediate: true })
 
 // Reload data when permissions are loaded
-watch(permissionsLoading, (loading) => {
-  if (!loading && hasPermission('view')) {
+watch(permissionsLoading, (isLoading) => {
+  if (!isLoading && hasPermission('view')) {
     fetchEndpointSlices()
   }
 })
@@ -101,7 +106,7 @@ watch(permissionsLoading, (loading) => {
         </template>
       </UDashboardNavbar>
 
-      <UDashboardToolbar v-if="hasPermission('view')">
+      <UDashboardToolbar>
         <template #left>
           <NamespaceSelector />
         </template>

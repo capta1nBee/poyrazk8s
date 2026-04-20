@@ -396,11 +396,19 @@ public class NetworkPolicyGeneratorService {
             policyName = generatePolicyName(request.getNamespace(), request.getPolicyType(), request.getPodSelector());
         }
 
-        // Check if policy with same name exists
-        if (generatedPolicyRepository.existsByClusterUidAndNamespaceAndName(
-                clusterUid, request.getNamespace(), policyName)) {
-            throw new RuntimeException("Policy with name '" + policyName + "' already exists in namespace '" +
-                    request.getNamespace() + "'");
+        // Check if policy with same name exists; allow reuse if prior record is soft-deleted
+        Optional<GeneratedNetworkPolicy> existingOpt = generatedPolicyRepository
+                .findByClusterUidAndNamespaceAndName(clusterUid, request.getNamespace(), policyName);
+        if (existingOpt.isPresent()) {
+            GeneratedNetworkPolicy existing = existingOpt.get();
+            if (!"deleted".equalsIgnoreCase(existing.getStatus())) {
+                throw new RuntimeException("Policy with name '" + policyName + "' already exists in namespace '" +
+                        request.getNamespace() + "'");
+            }
+            // Hard-delete the prior soft-deleted record so the name can be reused cleanly.
+            // Cascade on network_policy_migrations.policy_id removes its migration history.
+            generatedPolicyRepository.delete(existing);
+            generatedPolicyRepository.flush();
         }
 
         // Build the NetworkPolicy spec

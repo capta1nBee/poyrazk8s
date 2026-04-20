@@ -9,15 +9,15 @@ const is403 = computed(() => props.error.statusCode === 403)
 const is404 = computed(() => props.error.statusCode === 404)
 
 const title = computed(() => {
-  if (is403.value) return 'Erişim Reddedildi'
-  if (is404.value) return 'Sayfa Bulunamadı'
-  return 'Bir Hata Oluştu'
+  if (is403.value) return 'Access Denied'
+  if (is404.value) return 'Page Not Found'
+  return 'An Error Occurred'
 })
 
 const description = computed(() => {
-  if (is403.value) return 'Bu sayfaya erişim izniniz bulunmamaktadır.'
-  if (is404.value) return 'Aradığınız sayfa bulunamadı.'
-  return props.error.message || 'Beklenmeyen bir hata oluştu.'
+  if (is403.value) return 'You do not have permission to access this page.'
+  if (is404.value) return 'The page you are looking for could not be found.'
+  return props.error.message || 'An unexpected error occurred.'
 })
 
 const icon = computed(() => {
@@ -39,7 +39,7 @@ useSeoMeta({
 
 useHead({
   htmlAttrs: {
-    lang: 'tr'
+    lang: 'en'
   }
 })
 
@@ -85,22 +85,22 @@ const handleLogin = () => {
         <div v-if="is403" class="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg p-4">
           <p class="text-sm text-orange-700 dark:text-orange-300">
             <UIcon name="i-lucide-info" class="inline-block mr-1" />
-            Bu sayfayı görüntülemek için yetkiniz bulunmuyor.
-            Yöneticinizle iletişime geçerek gerekli izinleri talep edebilirsiniz.
+            You do not have permission to view this page.
+            Please contact your administrator to request the required access.
           </p>
         </div>
 
         <!-- Actions -->
         <div class="flex flex-col sm:flex-row gap-3 justify-center pt-4">
           <UButton
-            label="Ana Sayfaya Dön"
+            label="Go to Home"
             icon="i-lucide-home"
             size="lg"
             @click="handleBack"
           />
           <UButton
             v-if="is403"
-            label="Farklı Hesapla Giriş Yap"
+            label="Sign In with Different Account"
             icon="i-lucide-log-in"
             variant="outline"
             size="lg"
@@ -111,7 +111,7 @@ const handleLogin = () => {
         <!-- Error details (collapsed) -->
         <UCollapsible v-if="error.message && !is403 && !is404" class="mt-6">
           <UButton
-            label="Hata Detaylarını Göster"
+            label="Show Error Details"
             icon="i-lucide-chevron-down"
             variant="ghost"
             size="sm"

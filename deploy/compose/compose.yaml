@@ -71,6 +71,7 @@ services:
       - AGENT_API_KEY=poyraz-runtime-security-2026-agent-key
     depends_on:
       - dind
+      - postgres
     volumes:
       - ./k8s:/app/data
       - ./log:/app/logs

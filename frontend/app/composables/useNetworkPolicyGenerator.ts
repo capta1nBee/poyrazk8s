@@ -1,3 +1,4 @@
+import { toRaw } from 'vue'
 import type {
     NetworkPolicyRule,
     GeneratedNetworkPolicy,
@@ -6,6 +7,11 @@ import type {
     GeneratePolicyRequest,
     PolicyLabel
 } from '~/types/networkpolicygenerator'
+
+/** Strip Vue reactive proxies from a value so JSON.stringify doesn't blow up. */
+function toPlain<T>(value: T): T {
+    return JSON.parse(JSON.stringify(toRaw(value) as T))
+}
 
 export function useNetworkPolicyGenerator() {
     const config = useRuntimeConfig()
@@ -272,6 +278,8 @@ export function useNetworkPolicyGenerator() {
         error.value = null
         
         try {
+            // Convert Vue reactive proxy → plain object to avoid JSON circular reference error
+            const plainPolicy = toPlain(policy)
             const response = await $fetch<{ data: PolicyConflict[] }>(
                 `${baseUrl}/k8s/${clusterUid.value}/network-policy-generator/check-conflicts`,
                 {
@@ -280,7 +288,7 @@ export function useNetworkPolicyGenerator() {
                         'Content-Type': 'application/json',
                         ...getAuthHeader()
                     },
-                    body: policy
+                    body: plainPolicy
                 }
             )
             

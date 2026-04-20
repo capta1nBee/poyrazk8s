@@ -209,7 +209,7 @@ public class ResourceActionsController {
         }
 
         /**
-         * View Events - Get events related to a resource
+         * View Events - Get events related to a namespaced resource
          */
         @GetMapping("/{resourceKind}/namespaces/{namespace}/{name}/events")
         public ResponseEntity<List<K8sEvent>> getResourceEvents(
@@ -220,5 +220,18 @@ public class ResourceActionsController {
                 authHelper.checkPermissionOrThrow(clusterUid, namespace, resourceKind, name, "view");
                 return ResponseEntity.ok(
                                 eventService.getEventsForResource(clusterUid, namespace, resourceKind, name));
+        }
+
+        /**
+         * View Events - Get events related to a cluster-scoped resource (e.g. Node)
+         */
+        @GetMapping("/{resourceKind}/{name}/events")
+        public ResponseEntity<List<K8sEvent>> getClusterResourceEvents(
+                        @PathVariable String clusterUid,
+                        @PathVariable String resourceKind,
+                        @PathVariable String name) {
+                authHelper.checkPermissionOrThrow(clusterUid, null, resourceKind, name, "view");
+                return ResponseEntity.ok(
+                                eventService.getEventsForResource(clusterUid, null, resourceKind, name));
         }
 }

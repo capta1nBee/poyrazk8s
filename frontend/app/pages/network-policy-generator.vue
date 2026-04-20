@@ -20,6 +20,10 @@ import {
 const clusterStore = useClusterStore()
 const toast = useToast()
 
+// ── Rollback confirmation state (inline, avoids useConfirm promise issues) ──
+const showRollbackConfirmModal = ref(false)
+const pendingRollbackMigration = ref<PolicyMigration | null>(null)
+
 const {
     loading,
     error,
@@ -50,8 +54,6 @@ const {
     deselectAllRules,
     clearState
 } = useNetworkPolicyGenerator()
-
-const confirmDialog = useConfirm()
 
 const selectedCluster = computed(() => clusterStore.selectedCluster)
 
@@ -217,17 +219,20 @@ async function handleGeneratePolicy() {
 // Check conflicts and show modal
 async function handleCheckConflicts() {
     if (!selectedPolicy.value) return
-    
+
     const foundConflicts = await checkConflicts(selectedPolicy.value)
     if (foundConflicts.length > 0) {
         showConflictModal.value = true
     } else {
-        toast.add({
-            title: 'No conflicts found',
-            description: 'Policy can be safely applied',
-            color: 'green'
-        })
+        // No conflicts – apply the policy directly
+        await handleApplyPolicy()
     }
+}
+
+// Apply a policy from the list view (sets it as selected first, then runs the conflict check)
+async function applyPolicyFromList(policy: GeneratedNetworkPolicy) {
+    selectedPolicy.value = policy
+    await handleCheckConflicts()
 }
 
 // Apply policy
@@ -255,18 +260,21 @@ async function viewMigrationHistory(policy: GeneratedNetworkPolicy) {
     }
 }
 
-// Handle rollback
-async function handleRollback(migration: PolicyMigration) {
+// Handle rollback – open inline confirm modal
+function handleRollback(migration: PolicyMigration) {
     if (!selectedPolicy.value?.id) return
-    
-    if (!await confirmDialog.open({
-        title: 'Rollback Policy',
-        description: `Are you sure you want to rollback to version ${migration.version}?`,
-        confirmLabel: 'Rollback',
-        color: 'orange'
-    })) return
-    
-    await rollbackPolicy(selectedPolicy.value.id, migration.version, false)
+    pendingRollbackMigration.value = migration
+    showRollbackConfirmModal.value = true
+}
+
+// Execute rollback after user confirms. If the policy is currently applied to the
+// cluster, also push the rolled-back YAML so DB and cluster stay in sync.
+async function executeRollback() {
+    if (!selectedPolicy.value?.id || !pendingRollbackMigration.value) return
+    showRollbackConfirmModal.value = false
+    const applyToCluster = selectedPolicy.value.status === 'applied'
+    await rollbackPolicy(selectedPolicy.value.id, pendingRollbackMigration.value.version, applyToCluster)
+    pendingRollbackMigration.value = null
 }
 
 // Open delete confirmation
@@ -297,6 +305,57 @@ async function saveYamlEdits() {
     
     await updatePolicy(selectedPolicy.value.id, editingYaml.value, 'Manual YAML edit')
     showYamlEditModal.value = false
+}
+
+// ── Version-history diff ──────────────────────────────────────────────────
+
+/** Which migration id currently has its diff panel open */
+const expandedDiffId = ref<number | null>(null)
+
+type DiffLine = { text: string; type: 'added' | 'removed' | 'unchanged' }
+
+/**
+ * Compute a simple line-level diff between two YAML strings.
+ * Uses a greedy patience-style approach: finds longest common prefix/suffix
+ * per hunk, then marks the rest as removed/added.
+ */
+function computeLineDiff(oldYaml: string, newYaml: string): DiffLine[] {
+    const oldLines = (oldYaml || '').split('\n')
+    const newLines = (newYaml || '').split('\n')
+    const result: DiffLine[] = []
+
+    // Build LCS table (O(m*n) – fine for typical YAML files)
+    const m = oldLines.length
+    const n = newLines.length
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+    for (let i = m - 1; i >= 0; i--) {
+        for (let j = n - 1; j >= 0; j--) {
+            if (oldLines[i] === newLines[j]) {
+                dp[i][j] = 1 + dp[i + 1][j + 1]
+            } else {
+                dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1])
+            }
+        }
+    }
+
+    let i = 0, j = 0
+    while (i < m || j < n) {
+        if (i < m && j < n && oldLines[i] === newLines[j]) {
+            result.push({ text: oldLines[i], type: 'unchanged' })
+            i++; j++
+        } else if (j < n && (i >= m || dp[i + 1][j] <= dp[i][j + 1])) {
+            result.push({ text: newLines[j], type: 'added' })
+            j++
+        } else {
+            result.push({ text: oldLines[i], type: 'removed' })
+            i++
+        }
+    }
+    return result
+}
+
+function toggleDiff(migrationId: number) {
+    expandedDiffId.value = expandedDiffId.value === migrationId ? null : migrationId
 }
 
 // Copy YAML to clipboard
@@ -662,7 +721,7 @@ async function copyYaml() {
                   color="success"
                   variant="soft"
                   size="sm"
-                  @click="() => { selectedPolicy = policy; handleCheckConflicts(); }"
+                  @click="applyPolicyFromList(policy)"
                 >
                   Apply
                 </UButton>
@@ -832,55 +891,116 @@ async function copyYaml() {
   </UModal>
 
   <!-- Migration History Modal -->
-  <UModal v-model:open="showMigrationModal" :ui="{ width: 'max-w-3xl' }">
+  <UModal v-model:open="showMigrationModal" :ui="{ width: 'max-w-4xl' }">
     <template #content>
       <div class="p-6">
-        <h3 class="text-lg font-semibold mb-4">Version History</h3>
-        
-        <div class="space-y-3 max-h-[60vh] overflow-y-auto">
-          <div 
-            v-for="migration in migrations" 
+        <h3 class="text-lg font-semibold mb-4">Version History — {{ selectedPolicy?.name }}</h3>
+
+        <div class="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+          <div
+            v-for="migration in migrations"
             :key="migration.id"
-            class="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg"
+            :class="[
+              'rounded-lg border',
+              selectedPolicy?.currentVersion === migration.version
+                ? 'bg-green-50 dark:bg-green-900/20 border-green-400 dark:border-green-600 ring-2 ring-green-400/50'
+                : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700'
+            ]"
           >
-            <div class="flex items-start justify-between">
+            <!-- Header row -->
+            <div class="flex items-start justify-between p-4">
               <div class="flex items-start gap-3">
                 <div class="p-2 rounded-lg" :class="`bg-${getMigrationActionColor(migration.action)}-100 dark:bg-${getMigrationActionColor(migration.action)}-900/30`">
                   <UIcon :name="getMigrationActionIcon(migration.action)" class="h-4 w-4" />
                 </div>
                 <div>
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-center gap-2 flex-wrap">
                     <span class="font-medium">Version {{ migration.version }}</span>
                     <UBadge :color="getMigrationActionColor(migration.action)" size="xs">
                       {{ migration.action }}
+                    </UBadge>
+                    <UBadge
+                      v-if="selectedPolicy?.currentVersion === migration.version"
+                      color="success"
+                      size="xs"
+                      icon="i-lucide-check-circle"
+                    >
+                      Active
                     </UBadge>
                     <span v-if="migration.rollbackAt" class="text-xs text-gray-400">(rolled back)</span>
                   </div>
                   <p class="text-sm text-gray-600 dark:text-gray-400">{{ migration.changeDescription }}</p>
                   <p class="text-xs text-gray-400 mt-1">
-                    {{ migration.appliedBy }} - {{ new Date(migration.appliedAt || '').toLocaleString() }}
+                    {{ migration.appliedBy }} · {{ new Date(migration.appliedAt || '').toLocaleString() }}
                   </p>
-                  <p v-if="migration.diffSummary" class="text-xs text-gray-500 mt-1">
-                    {{ migration.diffSummary }}
-                  </p>
+                  <p v-if="migration.diffSummary" class="text-xs text-gray-500 mt-1">{{ migration.diffSummary }}</p>
                 </div>
               </div>
-              <UButton
-                v-if="migration.canRollback"
-                icon="i-lucide-undo"
-                color="neutral"
-                variant="ghost"
-                size="xs"
-                @click="handleRollback(migration)"
-              >
-                Rollback
-              </UButton>
+              <!-- Action buttons -->
+              <div class="flex items-center gap-2 shrink-0">
+                <!-- Show diff button (only when there are YAML payloads to compare) -->
+                <UButton
+                  v-if="migration.previousYaml || migration.newYaml"
+                  :icon="expandedDiffId === migration.id ? 'i-lucide-chevron-up' : 'i-lucide-diff'"
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                  @click="toggleDiff(migration.id)"
+                >
+                  {{ expandedDiffId === migration.id ? 'Hide Diff' : 'View Diff' }}
+                </UButton>
+                <UButton
+                  v-if="migration.canRollback"
+                  icon="i-lucide-undo"
+                  color="warning"
+                  variant="soft"
+                  size="xs"
+                  @click="handleRollback(migration)"
+                >
+                  Rollback
+                </UButton>
+              </div>
+            </div>
+
+            <!-- Diff panel (toggled) -->
+            <div v-if="expandedDiffId === migration.id" class="border-t border-gray-200 dark:border-gray-700 p-4">
+              <div v-if="migration.previousYaml && migration.newYaml">
+                <!-- Unified diff -->
+                <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Changes (unified diff)</p>
+                <div class="overflow-auto max-h-72 rounded bg-gray-950 text-xs font-mono">
+                  <table class="w-full border-collapse">
+                    <tbody>
+                      <tr
+                        v-for="(line, idx) in computeLineDiff(migration.previousYaml, migration.newYaml)"
+                        :key="idx"
+                        :class="{
+                          'bg-green-900/40 text-green-300': line.type === 'added',
+                          'bg-red-900/40 text-red-300 line-through': line.type === 'removed',
+                          'text-gray-300': line.type === 'unchanged'
+                        }"
+                      >
+                        <td class="px-2 py-0 w-4 select-none text-gray-600 text-right pr-3 border-r border-gray-800">
+                          {{ line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ' }}
+                        </td>
+                        <td class="px-3 py-0 whitespace-pre">{{ line.text }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <!-- If only one side exists, show it fully -->
+              <div v-else>
+                <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                  {{ migration.newYaml ? 'Current YAML' : 'Previous YAML' }}
+                </p>
+                <div class="overflow-auto max-h-72 rounded bg-gray-950 p-3 text-xs font-mono text-gray-200 whitespace-pre">{{ migration.newYaml || migration.previousYaml }}</div>
+              </div>
             </div>
           </div>
         </div>
-        
+
         <div class="flex justify-end mt-6">
-          <UButton color="neutral" @click="showMigrationModal = false">Close</UButton>
+          <UButton color="neutral" @click="showMigrationModal = false; expandedDiffId = null">Close</UButton>
         </div>
       </div>
     </template>
@@ -906,6 +1026,34 @@ async function copyYaml() {
           <UButton color="neutral" variant="ghost" @click="showDeleteModal = false">Cancel</UButton>
           <UButton color="error" :loading="loading" @click="handleDelete">
             Delete Policy
+          </UButton>
+        </div>
+      </div>
+    </template>
+  </UModal>
+
+  <!-- Rollback Confirmation Modal -->
+  <UModal v-model:open="showRollbackConfirmModal">
+    <template #content>
+      <div class="p-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
+            <UIcon name="i-lucide-undo" class="h-6 w-6 text-orange-600" />
+          </div>
+          <h3 class="text-lg font-semibold">Rollback Policy</h3>
+        </div>
+        <p class="text-gray-600 dark:text-gray-400 mb-6">
+          Are you sure you want to rollback version
+          <strong>{{ pendingRollbackMigration?.version }}</strong>
+          of <strong>{{ selectedPolicy?.name }}</strong>?
+          This undoes that change and restores the YAML that existed before it.
+        </p>
+        <div class="flex justify-end gap-3">
+          <UButton color="neutral" variant="ghost" @click="showRollbackConfirmModal = false; pendingRollbackMigration = null">
+            Cancel
+          </UButton>
+          <UButton color="warning" :loading="loading" @click="executeRollback">
+            Rollback
           </UButton>
         </div>
       </div>
