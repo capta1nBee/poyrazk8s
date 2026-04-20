@@ -54,7 +54,7 @@ docker compose up -d
 Apply the agent:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/capta1nBee/poyrazk8s/main/deploy/network-agent/network-agent.yaml
+kubectl apply -f https://raw.githubusercontent.com/capta1nBee/poyrazk8s/main/deploy/k8s/network-agent.yaml
 ```
 
 ### Important Settings
@@ -101,7 +101,7 @@ BACKEND__AGENT_API_KEY: "<YOUR_API_KEY>"
 ### Installation
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/capta1nBee/poyrazk8s/main/deploy/security-agent/security-agent.yaml
+kubectl apply -f https://raw.githubusercontent.com/capta1nBee/poyrazk8s/main/deploy/k8s/security-agent.yaml
 ```
 
 ---
