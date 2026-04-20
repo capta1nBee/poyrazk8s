@@ -5,7 +5,7 @@
 <h1 align="center">PoyrazK8s</h1>
 
 <p align="center">
-  <strong>The Enterprise-Grade Kubernetes Security & Orchestration Workspace</strong>
+  <strong>Kubernetes Security & Orchestration Workspace</strong>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 
 ## Strategic Advantage
 
-**PoyrazK8s** is designed for organizations requiring deep visibility into Kubernetes infrastructures. Leveraging **eBPF (Extended Berkeley Packet Filter)**, **PoyrazK8s** delivers kernel-level observability and runtime enforcement, bridging the gap between infrastructure management and advanced threat detection.
+**PoyrazK8s** is designed for organizations requiring deep visibility into Kubernetes infrastructures. Leveraging **eBPF (Extended Berkeley Packet Filter)**, **PoyrazK8s** delivers kernel-level observability , bridging the gap between infrastructure management and advanced threat detection.
 
 ---
 
@@ -118,14 +118,8 @@ Detailed recording and auditing of all terminal interactions and automated comma
 ![Pod Session Record Demo](images/exec.gif)
 
 ---
-
-###  Enterprise Configuration Management & Deep Analysis
-Perform deep-dive analysis into ConfigMaps and Secrets to ensure compliance, prevent configuration drift, and maintain absolute governance.
-
----
-
 ### Observability & Metric API Integration
-Deep-dive into granular performance data and real-time logs for comprehensive cluster visibility.
+### Detect and analyze objects dependent on ConfigMap & Secret modifications
 
 ---
 
