@@ -1,3 +1,12 @@
+export interface CrdNames {
+    kind?: string
+    plural?: string
+    singular?: string
+    shortNames?: string[]
+    listKind?: string
+    categories?: string[]
+}
+
 export interface CustomResourceDefinition {
     id?: number
     name: string
@@ -6,10 +15,11 @@ export interface CustomResourceDefinition {
     groupName?: string
     versions?: any[]
     scope?: string
-    names?: any
+    names?: string | CrdNames
     conditions?: any[]
-    labels?: Record<string, string>
-    annotations?: Record<string, string>
+    labels?: Record<string, string> | string
+    annotations?: Record<string, string> | string
     age?: string
+    k8sCreatedAt?: string
     createdAt?: string
 }

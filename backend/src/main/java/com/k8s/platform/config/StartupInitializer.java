@@ -2,6 +2,7 @@ package com.k8s.platform.config;
 
 import com.k8s.platform.domain.repository.UserRepository;
 import com.k8s.platform.service.cluster.ClusterContextManager;
+import com.k8s.platform.service.k8s.K8sWatcherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Component;
 public class StartupInitializer {
 
     private final ClusterContextManager clusterContextManager;
+    private final K8sWatcherService k8sWatcherService;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -41,6 +43,14 @@ public class StartupInitializer {
             log.info("All clusters initialized successfully");
         } catch (Exception e) {
             log.error("Error initializing clusters", e);
+        }
+
+        // Start informers for all active clusters (after clients are ready)
+        try {
+            k8sWatcherService.startWatchers();
+            log.info("All cluster informers started successfully");
+        } catch (Exception e) {
+            log.error("Error starting cluster informers", e);
         }
     }
 }

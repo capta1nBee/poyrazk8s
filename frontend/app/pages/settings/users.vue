@@ -216,7 +216,9 @@ const onEditSubmit = async () => {
 
   loading.value = true
   try {
-    await usersApi.updateUser(selectedUser.value.id, editState)
+    // Exclude roles — role management is handled via the Permissions panel (Casbin)
+    const { roles, ...payload } = editState
+    await usersApi.updateUser(selectedUser.value.id, payload as UpdateUserRequest)
     toast.add({ title: 'User updated', description: 'User has been updated successfully', color: 'success' })
     activePanel.value = 'list'
     await fetchUsers()
@@ -538,10 +540,14 @@ onMounted(async () => {
               </div>
             </div>
 
-            <div>
+            <div v-if="selectedUser?.authType !== 'LDAP'">
               <label class="block text-sm font-medium mb-1">Password</label>
               <p class="text-xs text-gray-500 mb-1">Leave empty to keep current password</p>
               <UInput v-model="editState.password" type="password" icon="i-lucide-lock" />
+            </div>
+            <div v-else class="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-sm text-blue-700 dark:text-blue-300">
+              <UIcon name="i-lucide-info" class="w-4 h-4 flex-shrink-0" />
+              <span>LDAP users authenticate via the directory server. Password cannot be changed here.</span>
             </div>
 
             <div class="flex gap-6">

@@ -5,10 +5,8 @@ import com.k8s.platform.domain.repository.ClusterRepository;
 import com.k8s.platform.service.cluster.ClusterContextManager;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.client.KubernetesClient;
-import io.fabric8.kubernetes.client.Watch;
-import io.fabric8.kubernetes.client.Watcher;
-import io.fabric8.kubernetes.client.WatcherException;
-import jakarta.annotation.PostConstruct;
+import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
+import io.fabric8.kubernetes.client.informers.SharedInformerFactory;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,282 +14,487 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
+/**
+ * Kubernetes resource watcher using Fabric8 SharedInformerFactory.
+ *
+ * <p>
+ * Advantages over raw Watch API:
+ * <ul>
+ * <li>Auto-reconnect on WebSocket failures</li>
+ * <li>Periodic resync (reconciliation) — configurable interval</li>
+ * <li>ResourceVersion tracking — no duplicate events after restart</li>
+ * <li>Shared thread pool per factory (instead of 1 thread per watch)</li>
+ * <li>Type-safe onAdd/onUpdate/onDelete handlers</li>
+ * </ul>
+ */
 @Component
 @Slf4j
 @RequiredArgsConstructor
 public class K8sWatcherService {
 
-    private final ClusterRepository clusterRepository;
-    private final ClusterContextManager clusterContextManager;
-    private final K8sResourceSyncService k8sResourceSyncService;
-    private final Map<String, Watch> activeWatches = new ConcurrentHashMap<>();
-    private final ExecutorService executorService = Executors.newCachedThreadPool();
+        private final ClusterRepository clusterRepository;
+        private final ClusterContextManager clusterContextManager;
+        private final K8sResourceSyncService k8sResourceSyncService;
 
-    @PostConstruct
-    public void init() {
-        log.info("Initializing Kubernetes watchers for all active clusters");
-        startWatchers();
-    }
+        /**
+         * One SharedInformerFactory per cluster — manages all informers for that
+         * cluster.
+         */
+        private final Map<String, SharedInformerFactory> activeFactories = new ConcurrentHashMap<>();
 
-    public void startWatchers() {
-        clusterRepository.findByIsActiveTrue().forEach(this::startWatchersForCluster);
-    }
+        /**
+         * Resync period: informers will do a full re-list every 10 minutes to catch any
+         * drift.
+         */
+        private static final long RESYNC_PERIOD_MS = 10 * 60 * 1000L;
 
-    public void startWatchersForCluster(Cluster cluster) {
-        String clusterUid = cluster.getUid();
+        // ── Public API ──────────────────────────────────────────────────────────
 
-        executorService.submit(() -> {
-            try {
-                KubernetesClient client = clusterContextManager.getClient(clusterUid);
-
-                // Reconcile cluster state (mark deleted items as deleted)
-                try {
-                    k8sResourceSyncService.reconcileCluster(cluster.getId(), client);
-                } catch (Exception e) {
-                    log.error("Failed to reconcile cluster {}: {}", cluster.getName(), e.getMessage());
-                }
-
-                // Start watchers for all requested resource types
-                watchResource(cluster, "Pods", client.pods().inAnyNamespace());
-                watchResource(cluster, "Deployments", client.apps().deployments().inAnyNamespace());
-                watchResource(cluster, "DaemonSets", client.apps().daemonSets().inAnyNamespace());
-                watchResource(cluster, "StatefulSets", client.apps().statefulSets().inAnyNamespace());
-                watchResource(cluster, "Services", client.services().inAnyNamespace());
-                watchResource(cluster, "Ingresses", client.network().v1().ingresses().inAnyNamespace());
-                watchResource(cluster, "PVCs", client.persistentVolumeClaims().inAnyNamespace());
-                watchResource(cluster, "PVs", client.persistentVolumes());
-                watchResource(cluster, "Jobs", client.batch().v1().jobs().inAnyNamespace());
-                watchResource(cluster, "CronJobs", client.batch().v1().cronjobs().inAnyNamespace());
-                watchResource(cluster, "ConfigMaps", client.configMaps().inAnyNamespace());
-                watchResource(cluster, "Secrets", client.secrets().inAnyNamespace());
-                watchResource(cluster, "Nodes", client.nodes());
-                watchResource(cluster, "EndpointSlices", client.discovery().v1().endpointSlices().inAnyNamespace());
-                watchResource(cluster, "Events", client.v1().events().inAnyNamespace());
-                watchResource(cluster, "Namespaces", client.namespaces());
-                watchResource(cluster, "ReplicaSets", client.apps().replicaSets().inAnyNamespace());
-                watchResource(cluster, "Leases", client.leases().inAnyNamespace());
-                watchResource(cluster, "ClusterRoles", client.rbac().clusterRoles());
-                watchResource(cluster, "ClusterRoleBindings", client.rbac().clusterRoleBindings());
-                watchResource(cluster, "Roles", client.rbac().roles().inAnyNamespace());
-                watchResource(cluster, "RoleBindings", client.rbac().roleBindings().inAnyNamespace());
-                watchResource(cluster, "ServiceAccounts", client.serviceAccounts().inAnyNamespace());
-                watchResource(cluster, "MutatingWebhookConfigurations", client.admissionRegistration().v1().mutatingWebhookConfigurations());
-                watchResource(cluster, "ValidatingWebhookConfigurations", client.admissionRegistration().v1().validatingWebhookConfigurations());
-                watchResource(cluster, "CertificateSigningRequests", client.certificates().v1().certificateSigningRequests());
-                watchResource(cluster, "CSIDrivers", client.storage().v1().csiDrivers());
-                watchResource(cluster, "CSINodes", client.storage().v1().csiNodes());
-                watchResource(cluster, "CustomResourceDefinitions", client.apiextensions().v1().customResourceDefinitions());
-                watchResource(cluster, "IngressClasses", client.network().v1().ingressClasses());
-                watchResource(cluster, "PriorityClasses", client.scheduling().v1().priorityClasses());
-                watchResource(cluster, "VolumeAttachments", client.storage().v1().volumeAttachments());
-                watchResource(cluster, "ReplicationControllers", client.replicationControllers().inAnyNamespace());
-                watchResource(cluster, "HPAs", client.autoscaling().v2().horizontalPodAutoscalers().inAnyNamespace());
-                watchResource(cluster, "NetworkPolicies", client.network().v1().networkPolicies().inAnyNamespace());
-
-                // Watch optional/alpha APIs with error handling
-                try {
-                    watchResource(cluster, "IPAddresses", client.network().v1alpha1().ipAddresses());
-                } catch (Exception e) {
-                    log.warn("IPAddress API not available for cluster {}: {}", cluster.getName(), e.getMessage());
-                }
-                try {
-                    watchResource(cluster, "PriorityLevelConfigurations", client.flowControl().v1beta3().priorityLevelConfigurations());
-                } catch (Exception e) {
-                    log.warn("PriorityLevelConfiguration API not available for cluster {}: {}", cluster.getName(), e.getMessage());
-                }
-                try {
-                    watchResource(cluster, "ValidatingAdmissionPolicies", client.admissionRegistration().v1beta1().validatingAdmissionPolicies());
-                } catch (Exception e) {
-                    log.warn("ValidatingAdmissionPolicy API not available for cluster {}: {}", cluster.getName(), e.getMessage());
-                }
-                try {
-                    watchResource(cluster, "ValidatingAdmissionPolicyBindings", client.admissionRegistration().v1beta1().validatingAdmissionPolicyBindings());
-                } catch (Exception e) {
-                    log.warn("ValidatingAdmissionPolicyBinding API not available for cluster {}: {}", cluster.getName(), e.getMessage());
-                }
-
-            } catch (Exception e) {
-                log.error("Failed to start watchers for cluster {}: {}", cluster.getName(), e.getMessage());
-            }
-        });
-    }
-
-    private <T extends HasMetadata> void watchResource(Cluster cluster, String resourceType,
-            io.fabric8.kubernetes.client.dsl.Watchable<T> watchable) {
-        String watchKey = cluster.getUid() + "-" + resourceType.toLowerCase();
-
-        if (activeWatches.containsKey(watchKey)) {
-            return;
+        public void startWatchers() {
+                clusterRepository.findByIsActiveTrue().forEach(this::startWatchersForCluster);
         }
 
-        Watch watch = watchable.watch(new Watcher<T>() {
-            @Override
-            public void eventReceived(Action action, T resource) {
-                log.info("Cluster {}: [{}] {} {} in namespace {}",
-                        cluster.getName(), action, resourceType, resource.getMetadata().getName(),
-                        resource.getMetadata().getNamespace() != null ? resource.getMetadata().getNamespace() : "N/A");
+        public void startWatchersForCluster(Cluster cluster) {
+                String clusterUid = cluster.getUid();
+
+                // Stop existing informers for this cluster if any (idempotent restart)
+                stopWatchersForCluster(clusterUid);
 
                 try {
-                    handleResourceSync(cluster.getId(), action, resourceType, resource);
+                        KubernetesClient client = clusterContextManager.getClient(clusterUid);
+                        Long clusterId = cluster.getId();
+
+                        // Reconcile cluster state before starting informers
+                        try {
+                                k8sResourceSyncService.reconcileCluster(clusterId, client);
+                        } catch (Exception e) {
+                                log.error("Failed to reconcile cluster {}: {}", cluster.getName(), e.getMessage());
+                        }
+
+                        SharedInformerFactory factory = client.informers();
+
+                        // ── Core resources ──────────────────────────────────────
+                        registerPodInformer(factory, clusterId, cluster.getName(), client);
+                        registerInformer(factory, clusterId, cluster.getName(), "Deployment",
+                                        io.fabric8.kubernetes.api.model.apps.Deployment.class,
+                                        (c, r) -> k8sResourceSyncService.syncDeployment(c,
+                                                        (io.fabric8.kubernetes.api.model.apps.Deployment) r),
+                                        (uid) -> k8sResourceSyncService.markDeploymentDeleted(uid),
+                                        client.apps().deployments().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "DaemonSet",
+                                        io.fabric8.kubernetes.api.model.apps.DaemonSet.class,
+                                        (c, r) -> k8sResourceSyncService.syncDaemonSet(c,
+                                                        (io.fabric8.kubernetes.api.model.apps.DaemonSet) r),
+                                        (uid) -> k8sResourceSyncService.markDaemonSetDeleted(uid),
+                                        client.apps().daemonSets().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "StatefulSet",
+                                        io.fabric8.kubernetes.api.model.apps.StatefulSet.class,
+                                        (c, r) -> k8sResourceSyncService.syncStatefulSet(c,
+                                                        (io.fabric8.kubernetes.api.model.apps.StatefulSet) r),
+                                        (uid) -> k8sResourceSyncService.markStatefulSetDeleted(uid),
+                                        client.apps().statefulSets().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Service",
+                                        io.fabric8.kubernetes.api.model.Service.class,
+                                        (c, r) -> k8sResourceSyncService.syncService(c,
+                                                        (io.fabric8.kubernetes.api.model.Service) r),
+                                        (uid) -> k8sResourceSyncService.markServiceDeleted(uid),
+                                        client.services().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Ingress",
+                                        io.fabric8.kubernetes.api.model.networking.v1.Ingress.class,
+                                        (c, r) -> k8sResourceSyncService.syncIngress(c,
+                                                        (io.fabric8.kubernetes.api.model.networking.v1.Ingress) r),
+                                        (uid) -> k8sResourceSyncService.markIngressDeleted(uid),
+                                        client.network().v1().ingresses().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "PVC",
+                                        io.fabric8.kubernetes.api.model.PersistentVolumeClaim.class,
+                                        (c, r) -> k8sResourceSyncService.syncPVC(c,
+                                                        (io.fabric8.kubernetes.api.model.PersistentVolumeClaim) r),
+                                        (uid) -> k8sResourceSyncService.markPVCDeleted(uid),
+                                        client.persistentVolumeClaims().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "PV",
+                                        io.fabric8.kubernetes.api.model.PersistentVolume.class,
+                                        (c, r) -> k8sResourceSyncService.syncPersistentVolume(c,
+                                                        (io.fabric8.kubernetes.api.model.PersistentVolume) r),
+                                        (uid) -> k8sResourceSyncService.markPVDeleted(uid),
+                                        client.persistentVolumes());
+                        registerInformer(factory, clusterId, cluster.getName(), "Job",
+                                        io.fabric8.kubernetes.api.model.batch.v1.Job.class,
+                                        (c, r) -> k8sResourceSyncService.syncJob(c,
+                                                        (io.fabric8.kubernetes.api.model.batch.v1.Job) r),
+                                        (uid) -> k8sResourceSyncService.markJobDeleted(uid),
+                                        client.batch().v1().jobs().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "CronJob",
+                                        io.fabric8.kubernetes.api.model.batch.v1.CronJob.class,
+                                        (c, r) -> k8sResourceSyncService.syncCronJob(c,
+                                                        (io.fabric8.kubernetes.api.model.batch.v1.CronJob) r),
+                                        (uid) -> k8sResourceSyncService.markCronJobDeleted(uid),
+                                        client.batch().v1().cronjobs().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "ConfigMap",
+                                        io.fabric8.kubernetes.api.model.ConfigMap.class,
+                                        (c, r) -> k8sResourceSyncService.syncConfigMap(c,
+                                                        (io.fabric8.kubernetes.api.model.ConfigMap) r),
+                                        (uid) -> k8sResourceSyncService.markConfigMapDeleted(uid),
+                                        client.configMaps().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Secret",
+                                        io.fabric8.kubernetes.api.model.Secret.class,
+                                        (c, r) -> k8sResourceSyncService.syncSecret(c,
+                                                        (io.fabric8.kubernetes.api.model.Secret) r),
+                                        (uid) -> k8sResourceSyncService.markSecretDeleted(uid),
+                                        client.secrets().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Node",
+                                        io.fabric8.kubernetes.api.model.Node.class,
+                                        (c, r) -> k8sResourceSyncService.syncNode(c,
+                                                        (io.fabric8.kubernetes.api.model.Node) r),
+                                        (uid) -> k8sResourceSyncService.markNodeDeleted(uid),
+                                        client.nodes());
+                        registerInformer(factory, clusterId, cluster.getName(), "EndpointSlice",
+                                        io.fabric8.kubernetes.api.model.discovery.v1.EndpointSlice.class,
+                                        (c, r) -> k8sResourceSyncService.syncEndpointSlice(c,
+                                                        (io.fabric8.kubernetes.api.model.discovery.v1.EndpointSlice) r),
+                                        (uid) -> k8sResourceSyncService.markEndpointSliceDeleted(uid),
+                                        client.discovery().v1().endpointSlices().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Event",
+                                        io.fabric8.kubernetes.api.model.Event.class,
+                                        (c, r) -> k8sResourceSyncService.syncEvent(c,
+                                                        (io.fabric8.kubernetes.api.model.Event) r),
+                                        (uid) -> k8sResourceSyncService.markEventDeleted(uid),
+                                        client.v1().events().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Namespace",
+                                        io.fabric8.kubernetes.api.model.Namespace.class,
+                                        (c, r) -> k8sResourceSyncService.syncNamespace(c,
+                                                        (io.fabric8.kubernetes.api.model.Namespace) r),
+                                        (uid) -> k8sResourceSyncService.markNamespaceDeleted(uid),
+                                        client.namespaces());
+                        registerInformer(factory, clusterId, cluster.getName(), "ReplicaSet",
+                                        io.fabric8.kubernetes.api.model.apps.ReplicaSet.class,
+                                        (c, r) -> k8sResourceSyncService.syncReplicaSet(c,
+                                                        (io.fabric8.kubernetes.api.model.apps.ReplicaSet) r),
+                                        (uid) -> k8sResourceSyncService.markReplicaSetDeleted(uid),
+                                        client.apps().replicaSets().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "Lease",
+                                        io.fabric8.kubernetes.api.model.coordination.v1.Lease.class,
+                                        (c, r) -> k8sResourceSyncService.syncLease(c,
+                                                        (io.fabric8.kubernetes.api.model.coordination.v1.Lease) r),
+                                        (uid) -> k8sResourceSyncService.markLeaseDeleted(uid),
+                                        client.leases().inAnyNamespace());
+
+                        // ── RBAC ────────────────────────────────────────────────
+                        registerInformer(factory, clusterId, cluster.getName(), "ClusterRole",
+                                        io.fabric8.kubernetes.api.model.rbac.ClusterRole.class,
+                                        (c, r) -> k8sResourceSyncService.syncClusterRole(c,
+                                                        (io.fabric8.kubernetes.api.model.rbac.ClusterRole) r),
+                                        (uid) -> k8sResourceSyncService.markClusterRoleDeleted(uid),
+                                        client.rbac().clusterRoles());
+                        registerInformer(factory, clusterId, cluster.getName(), "ClusterRoleBinding",
+                                        io.fabric8.kubernetes.api.model.rbac.ClusterRoleBinding.class,
+                                        (c, r) -> k8sResourceSyncService.syncClusterRoleBinding(c,
+                                                        (io.fabric8.kubernetes.api.model.rbac.ClusterRoleBinding) r),
+                                        (uid) -> k8sResourceSyncService.markClusterRoleBindingDeleted(uid),
+                                        client.rbac().clusterRoleBindings());
+                        registerInformer(factory, clusterId, cluster.getName(), "Role",
+                                        io.fabric8.kubernetes.api.model.rbac.Role.class,
+                                        (c, r) -> k8sResourceSyncService.syncRole(c,
+                                                        (io.fabric8.kubernetes.api.model.rbac.Role) r),
+                                        (uid) -> k8sResourceSyncService.markRoleDeleted(uid),
+                                        client.rbac().roles().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "RoleBinding",
+                                        io.fabric8.kubernetes.api.model.rbac.RoleBinding.class,
+                                        (c, r) -> k8sResourceSyncService.syncRoleBinding(c,
+                                                        (io.fabric8.kubernetes.api.model.rbac.RoleBinding) r),
+                                        (uid) -> k8sResourceSyncService.markRoleBindingDeleted(uid),
+                                        client.rbac().roleBindings().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "ServiceAccount",
+                                        io.fabric8.kubernetes.api.model.ServiceAccount.class,
+                                        (c, r) -> k8sResourceSyncService.syncServiceAccount(c,
+                                                        (io.fabric8.kubernetes.api.model.ServiceAccount) r),
+                                        (uid) -> k8sResourceSyncService.markServiceAccountDeleted(uid),
+                                        client.serviceAccounts().inAnyNamespace());
+
+                        // ── Webhooks & Certificates ─────────────────────────────
+                        registerInformer(factory, clusterId, cluster.getName(), "MutatingWebhookConfiguration",
+                                        io.fabric8.kubernetes.api.model.admissionregistration.v1.MutatingWebhookConfiguration.class,
+                                        (c, r) -> k8sResourceSyncService.syncMutatingWebhookConfiguration(c,
+                                                        (io.fabric8.kubernetes.api.model.admissionregistration.v1.MutatingWebhookConfiguration) r),
+                                        (uid) -> k8sResourceSyncService.markMutatingWebhookConfigurationDeleted(uid),
+                                        client.admissionRegistration().v1().mutatingWebhookConfigurations());
+                        registerInformer(factory, clusterId, cluster.getName(), "ValidatingWebhookConfiguration",
+                                        io.fabric8.kubernetes.api.model.admissionregistration.v1.ValidatingWebhookConfiguration.class,
+                                        (c, r) -> k8sResourceSyncService.syncValidatingWebhookConfiguration(c,
+                                                        (io.fabric8.kubernetes.api.model.admissionregistration.v1.ValidatingWebhookConfiguration) r),
+                                        (uid) -> k8sResourceSyncService.markValidatingWebhookConfigurationDeleted(uid),
+                                        client.admissionRegistration().v1().validatingWebhookConfigurations());
+                        registerInformer(factory, clusterId, cluster.getName(), "CertificateSigningRequest",
+                                        io.fabric8.kubernetes.api.model.certificates.v1.CertificateSigningRequest.class,
+                                        (c, r) -> k8sResourceSyncService.syncCertificateSigningRequest(c,
+                                                        (io.fabric8.kubernetes.api.model.certificates.v1.CertificateSigningRequest) r),
+                                        (uid) -> k8sResourceSyncService.markCertificateSigningRequestDeleted(uid),
+                                        client.certificates().v1().certificateSigningRequests());
+
+                        // ── Storage ─────────────────────────────────────────────
+                        registerInformer(factory, clusterId, cluster.getName(), "CSIDriver",
+                                        io.fabric8.kubernetes.api.model.storage.CSIDriver.class,
+                                        (c, r) -> k8sResourceSyncService.syncCSIDriver(c,
+                                                        (io.fabric8.kubernetes.api.model.storage.CSIDriver) r),
+                                        (uid) -> k8sResourceSyncService.markCSIDriverDeleted(uid),
+                                        client.storage().v1().csiDrivers());
+                        registerInformer(factory, clusterId, cluster.getName(), "CSINode",
+                                        io.fabric8.kubernetes.api.model.storage.CSINode.class,
+                                        (c, r) -> k8sResourceSyncService.syncCSINode(c,
+                                                        (io.fabric8.kubernetes.api.model.storage.CSINode) r),
+                                        (uid) -> k8sResourceSyncService.markCSINodeDeleted(uid),
+                                        client.storage().v1().csiNodes());
+                        registerInformer(factory, clusterId, cluster.getName(), "VolumeAttachment",
+                                        io.fabric8.kubernetes.api.model.storage.VolumeAttachment.class,
+                                        (c, r) -> k8sResourceSyncService.syncVolumeAttachment(c,
+                                                        (io.fabric8.kubernetes.api.model.storage.VolumeAttachment) r),
+                                        (uid) -> k8sResourceSyncService.markVolumeAttachmentDeleted(uid),
+                                        client.storage().v1().volumeAttachments());
+
+                        // ── Extensions ──────────────────────────────────────────
+                        registerInformer(factory, clusterId, cluster.getName(), "CustomResourceDefinition",
+                                        io.fabric8.kubernetes.api.model.apiextensions.v1.CustomResourceDefinition.class,
+                                        (c, r) -> k8sResourceSyncService.syncCustomResourceDefinition(c,
+                                                        (io.fabric8.kubernetes.api.model.apiextensions.v1.CustomResourceDefinition) r),
+                                        (uid) -> k8sResourceSyncService.markCustomResourceDefinitionDeleted(uid),
+                                        client.apiextensions().v1().customResourceDefinitions());
+                        registerInformer(factory, clusterId, cluster.getName(), "IngressClass",
+                                        io.fabric8.kubernetes.api.model.networking.v1.IngressClass.class,
+                                        (c, r) -> k8sResourceSyncService.syncIngressClass(c,
+                                                        (io.fabric8.kubernetes.api.model.networking.v1.IngressClass) r),
+                                        (uid) -> k8sResourceSyncService.markIngressClassDeleted(uid),
+                                        client.network().v1().ingressClasses());
+                        registerInformer(factory, clusterId, cluster.getName(), "PriorityClass",
+                                        io.fabric8.kubernetes.api.model.scheduling.v1.PriorityClass.class,
+                                        (c, r) -> k8sResourceSyncService.syncPriorityClass(c,
+                                                        (io.fabric8.kubernetes.api.model.scheduling.v1.PriorityClass) r),
+                                        (uid) -> k8sResourceSyncService.markPriorityClassDeleted(uid),
+                                        client.scheduling().v1().priorityClasses());
+                        registerInformer(factory, clusterId, cluster.getName(), "ReplicationController",
+                                        io.fabric8.kubernetes.api.model.ReplicationController.class,
+                                        (c, r) -> k8sResourceSyncService.syncReplicationController(c,
+                                                        (io.fabric8.kubernetes.api.model.ReplicationController) r),
+                                        (uid) -> k8sResourceSyncService.markReplicationControllerDeleted(uid),
+                                        client.replicationControllers().inAnyNamespace());
+                        registerInformer(factory, clusterId, cluster.getName(), "HPA",
+                                        io.fabric8.kubernetes.api.model.autoscaling.v2.HorizontalPodAutoscaler.class,
+                                        (c, r) -> k8sResourceSyncService.syncHpa(c,
+                                                        (io.fabric8.kubernetes.api.model.autoscaling.v2.HorizontalPodAutoscaler) r),
+                                        (uid) -> k8sResourceSyncService.markHpaDeleted(uid),
+                                        client.autoscaling().v2().horizontalPodAutoscalers().inAnyNamespace());
+                        registerNetworkPolicyInformer(factory, clusterId, cluster.getName(), client);
+
+                        // ── Optional / Alpha APIs (may not be available on all clusters) ──
+                        tryRegisterInformer(factory, clusterId, cluster.getName(), "IPAddress",
+                                        io.fabric8.kubernetes.api.model.networking.v1alpha1.IPAddress.class,
+                                        (c, r) -> k8sResourceSyncService.syncIPAddress(c,
+                                                        (io.fabric8.kubernetes.api.model.networking.v1alpha1.IPAddress) r),
+                                        (uid) -> k8sResourceSyncService.markIPAddressDeleted(uid),
+                                        client.network().v1alpha1().ipAddresses());
+                        tryRegisterInformer(factory, clusterId, cluster.getName(), "PriorityLevelConfiguration",
+                                        io.fabric8.kubernetes.api.model.flowcontrol.v1beta3.PriorityLevelConfiguration.class,
+                                        (c, r) -> k8sResourceSyncService.syncPriorityLevelConfiguration(c,
+                                                        (io.fabric8.kubernetes.api.model.flowcontrol.v1beta3.PriorityLevelConfiguration) r),
+                                        (uid) -> k8sResourceSyncService.markPriorityLevelConfigurationDeleted(uid),
+                                        client.flowControl().v1beta3().priorityLevelConfigurations());
+                        tryRegisterInformer(factory, clusterId, cluster.getName(), "ValidatingAdmissionPolicy",
+                                        io.fabric8.kubernetes.api.model.admissionregistration.v1beta1.ValidatingAdmissionPolicy.class,
+                                        (c, r) -> k8sResourceSyncService.syncValidatingAdmissionPolicy(c,
+                                                        (io.fabric8.kubernetes.api.model.admissionregistration.v1beta1.ValidatingAdmissionPolicy) r),
+                                        (uid) -> k8sResourceSyncService.markValidatingAdmissionPolicyDeleted(uid),
+                                        client.admissionRegistration().v1beta1().validatingAdmissionPolicies());
+                        tryRegisterInformer(factory, clusterId, cluster.getName(), "ValidatingAdmissionPolicyBinding",
+                                        io.fabric8.kubernetes.api.model.admissionregistration.v1beta1.ValidatingAdmissionPolicyBinding.class,
+                                        (c, r) -> k8sResourceSyncService.syncValidatingAdmissionPolicyBinding(c,
+                                                        (io.fabric8.kubernetes.api.model.admissionregistration.v1beta1.ValidatingAdmissionPolicyBinding) r),
+                                        (uid) -> k8sResourceSyncService
+                                                        .markValidatingAdmissionPolicyBindingDeleted(uid),
+                                        client.admissionRegistration().v1beta1().validatingAdmissionPolicyBindings());
+
+                        factory.startAllRegisteredInformers();
+                        activeFactories.put(clusterUid, factory);
+                        log.info("Started SharedInformerFactory for cluster '{}' with resync={}ms", cluster.getName(),
+                                        RESYNC_PERIOD_MS);
+
                 } catch (Exception e) {
-                    log.error("Failed to sync {} {} for cluster {}: {}", resourceType, resource.getMetadata().getName(),
-                            cluster.getName(), e.getMessage());
+                        log.error("Failed to start informers for cluster {}: {}", cluster.getName(), e.getMessage(), e);
                 }
-            }
-
-            @Override
-            public void onClose(WatcherException cause) {
-                if (cause != null) {
-                    log.error("Watch for {} closed with error on cluster {}: {}",
-                            resourceType, cluster.getName(), cause.getMessage());
-                    activeWatches.remove(watchKey);
-                }
-            }
-        });
-
-        activeWatches.put(watchKey, watch);
-        log.info("Started {} watcher for cluster: {}", resourceType, cluster.getName());
-    }
-
-    private void handleResourceSync(Long clusterId, Watcher.Action action, String resourceType, HasMetadata resource) {
-        String uid = resource.getMetadata().getUid();
-
-        if (action == Watcher.Action.DELETED) {
-            switch (resourceType) {
-                case "Pods" -> k8sResourceSyncService.markPodDeleted(uid);
-                case "Deployments" -> k8sResourceSyncService.markDeploymentDeleted(uid);
-                case "DaemonSets" -> k8sResourceSyncService.markDaemonSetDeleted(uid);
-                case "StatefulSets" -> k8sResourceSyncService.markStatefulSetDeleted(uid);
-                case "Services" -> k8sResourceSyncService.markServiceDeleted(uid);
-                case "Ingresses" -> k8sResourceSyncService.markIngressDeleted(uid);
-                case "CronJobs" -> k8sResourceSyncService.markCronJobDeleted(uid);
-                case "Jobs" -> k8sResourceSyncService.markJobDeleted(uid);
-                case "ConfigMaps" -> k8sResourceSyncService.markConfigMapDeleted(uid);
-                case "Secrets" -> k8sResourceSyncService.markSecretDeleted(uid);
-                case "Nodes" -> k8sResourceSyncService.markNodeDeleted(uid);
-                case "EndpointSlices" -> k8sResourceSyncService.markEndpointSliceDeleted(uid);
-                case "Events" -> k8sResourceSyncService.markEventDeleted(uid);
-                case "Namespaces" -> k8sResourceSyncService.markNamespaceDeleted(uid);
-                case "PVCs", "PersistentVolumeClaims" -> k8sResourceSyncService.markPVCDeleted(uid);
-                case "PVs" -> k8sResourceSyncService.markPVDeleted(uid);
-                case "ReplicaSets" -> k8sResourceSyncService.markReplicaSetDeleted(uid);
-                case "Leases" -> k8sResourceSyncService.markLeaseDeleted(uid);
-                case "ClusterRoles" -> k8sResourceSyncService.markClusterRoleDeleted(uid);
-                case "ClusterRoleBindings" -> k8sResourceSyncService.markClusterRoleBindingDeleted(uid);
-                case "Roles" -> k8sResourceSyncService.markRoleDeleted(uid);
-                case "RoleBindings" -> k8sResourceSyncService.markRoleBindingDeleted(uid);
-                case "ServiceAccounts" -> k8sResourceSyncService.markServiceAccountDeleted(uid);
-                case "MutatingWebhookConfigurations" -> k8sResourceSyncService.markMutatingWebhookConfigurationDeleted(uid);
-                case "ValidatingWebhookConfigurations" -> k8sResourceSyncService.markValidatingWebhookConfigurationDeleted(uid);
-                case "CertificateSigningRequests" -> k8sResourceSyncService.markCertificateSigningRequestDeleted(uid);
-                case "CSIDrivers" -> k8sResourceSyncService.markCSIDriverDeleted(uid);
-                case "CSINodes" -> k8sResourceSyncService.markCSINodeDeleted(uid);
-                case "CustomResourceDefinitions" -> k8sResourceSyncService.markCustomResourceDefinitionDeleted(uid);
-                case "IngressClasses" -> k8sResourceSyncService.markIngressClassDeleted(uid);
-                case "IPAddresses" -> k8sResourceSyncService.markIPAddressDeleted(uid);
-                case "PriorityClasses" -> k8sResourceSyncService.markPriorityClassDeleted(uid);
-                case "PriorityLevelConfigurations" -> k8sResourceSyncService.markPriorityLevelConfigurationDeleted(uid);
-                case "ValidatingAdmissionPolicies" -> k8sResourceSyncService.markValidatingAdmissionPolicyDeleted(uid);
-                case "ValidatingAdmissionPolicyBindings" -> k8sResourceSyncService.markValidatingAdmissionPolicyBindingDeleted(uid);
-                case "VolumeAttachments" -> k8sResourceSyncService.markVolumeAttachmentDeleted(uid);
-                case "ReplicationControllers" -> k8sResourceSyncService.markReplicationControllerDeleted(uid);
-                case "HPAs" -> k8sResourceSyncService.markHpaDeleted(uid);
-                case "NetworkPolicies" -> k8sResourceSyncService.markGeneratedNetworkPolicyDeleted(
-                        clusterId,
-                        resource.getMetadata().getNamespace(),
-                        resource.getMetadata().getName());
-                default -> log.warn("Deletion sync not implemented for resource type: {}", resourceType);
-            }
-        } else {
-            // ADDED, MODIFIED
-            switch (resourceType) {
-                case "Pods" ->
-                    k8sResourceSyncService.syncPod(clusterId, (io.fabric8.kubernetes.api.model.Pod) resource);
-                case "Deployments" -> k8sResourceSyncService.syncDeployment(clusterId,
-                        (io.fabric8.kubernetes.api.model.apps.Deployment) resource);
-                case "DaemonSets" -> k8sResourceSyncService.syncDaemonSet(clusterId,
-                        (io.fabric8.kubernetes.api.model.apps.DaemonSet) resource);
-                case "StatefulSets" -> k8sResourceSyncService.syncStatefulSet(clusterId,
-                        (io.fabric8.kubernetes.api.model.apps.StatefulSet) resource);
-                case "Services" ->
-                    k8sResourceSyncService.syncService(clusterId, (io.fabric8.kubernetes.api.model.Service) resource);
-                case "Ingresses" -> k8sResourceSyncService.syncIngress(clusterId,
-                        (io.fabric8.kubernetes.api.model.networking.v1.Ingress) resource);
-                case "CronJobs" -> k8sResourceSyncService.syncCronJob(clusterId,
-                        (io.fabric8.kubernetes.api.model.batch.v1.CronJob) resource);
-                case "Jobs" -> k8sResourceSyncService.syncJob(clusterId,
-                        (io.fabric8.kubernetes.api.model.batch.v1.Job) resource);
-                case "ConfigMaps" -> k8sResourceSyncService.syncConfigMap(clusterId,
-                        (io.fabric8.kubernetes.api.model.ConfigMap) resource);
-                case "Secrets" ->
-                    k8sResourceSyncService.syncSecret(clusterId, (io.fabric8.kubernetes.api.model.Secret) resource);
-                case "Nodes" ->
-                    k8sResourceSyncService.syncNode(clusterId, (io.fabric8.kubernetes.api.model.Node) resource);
-                case "EndpointSlices" -> k8sResourceSyncService.syncEndpointSlice(clusterId,
-                        (io.fabric8.kubernetes.api.model.discovery.v1.EndpointSlice) resource);
-                case "Events" ->
-                    k8sResourceSyncService.syncEvent(clusterId, (io.fabric8.kubernetes.api.model.Event) resource);
-                case "Namespaces" -> k8sResourceSyncService.syncNamespace(clusterId,
-                        (io.fabric8.kubernetes.api.model.Namespace) resource);
-                case "PVCs", "PersistentVolumeClaims" -> k8sResourceSyncService.syncPVC(clusterId,
-                        (io.fabric8.kubernetes.api.model.PersistentVolumeClaim) resource);
-                case "PVs" -> k8sResourceSyncService.syncPersistentVolume(clusterId,
-                        (io.fabric8.kubernetes.api.model.PersistentVolume) resource);
-                case "ReplicaSets" -> k8sResourceSyncService.syncReplicaSet(clusterId,
-                        (io.fabric8.kubernetes.api.model.apps.ReplicaSet) resource);
-                case "Leases" -> k8sResourceSyncService.syncLease(clusterId,
-                        (io.fabric8.kubernetes.api.model.coordination.v1.Lease) resource);
-                case "ClusterRoles" -> k8sResourceSyncService.syncClusterRole(clusterId,
-                        (io.fabric8.kubernetes.api.model.rbac.ClusterRole) resource);
-                case "ClusterRoleBindings" -> k8sResourceSyncService.syncClusterRoleBinding(clusterId,
-                        (io.fabric8.kubernetes.api.model.rbac.ClusterRoleBinding) resource);
-                case "Roles" -> k8sResourceSyncService.syncRole(clusterId,
-                        (io.fabric8.kubernetes.api.model.rbac.Role) resource);
-                case "RoleBindings" -> k8sResourceSyncService.syncRoleBinding(clusterId,
-                        (io.fabric8.kubernetes.api.model.rbac.RoleBinding) resource);
-                case "ServiceAccounts" -> k8sResourceSyncService.syncServiceAccount(clusterId,
-                        (io.fabric8.kubernetes.api.model.ServiceAccount) resource);
-                case "MutatingWebhookConfigurations" -> k8sResourceSyncService.syncMutatingWebhookConfiguration(clusterId,
-                        (io.fabric8.kubernetes.api.model.admissionregistration.v1.MutatingWebhookConfiguration) resource);
-                case "ValidatingWebhookConfigurations" -> k8sResourceSyncService.syncValidatingWebhookConfiguration(clusterId,
-                        (io.fabric8.kubernetes.api.model.admissionregistration.v1.ValidatingWebhookConfiguration) resource);
-                case "CertificateSigningRequests" -> k8sResourceSyncService.syncCertificateSigningRequest(clusterId,
-                        (io.fabric8.kubernetes.api.model.certificates.v1.CertificateSigningRequest) resource);
-                case "CSIDrivers" -> k8sResourceSyncService.syncCSIDriver(clusterId,
-                        (io.fabric8.kubernetes.api.model.storage.CSIDriver) resource);
-                case "CSINodes" -> k8sResourceSyncService.syncCSINode(clusterId,
-                        (io.fabric8.kubernetes.api.model.storage.CSINode) resource);
-                case "CustomResourceDefinitions" -> k8sResourceSyncService.syncCustomResourceDefinition(clusterId,
-                        (io.fabric8.kubernetes.api.model.apiextensions.v1.CustomResourceDefinition) resource);
-                case "IngressClasses" -> k8sResourceSyncService.syncIngressClass(clusterId,
-                        (io.fabric8.kubernetes.api.model.networking.v1.IngressClass) resource);
-                case "IPAddresses" -> k8sResourceSyncService.syncIPAddress(clusterId,
-                        (io.fabric8.kubernetes.api.model.networking.v1alpha1.IPAddress) resource);
-                case "PriorityClasses" -> k8sResourceSyncService.syncPriorityClass(clusterId,
-                        (io.fabric8.kubernetes.api.model.scheduling.v1.PriorityClass) resource);
-                case "PriorityLevelConfigurations" -> k8sResourceSyncService.syncPriorityLevelConfiguration(clusterId,
-                        (io.fabric8.kubernetes.api.model.flowcontrol.v1beta3.PriorityLevelConfiguration) resource);
-                case "ValidatingAdmissionPolicies" -> k8sResourceSyncService.syncValidatingAdmissionPolicy(clusterId,
-                        (io.fabric8.kubernetes.api.model.admissionregistration.v1beta1.ValidatingAdmissionPolicy) resource);
-                case "ValidatingAdmissionPolicyBindings" -> k8sResourceSyncService.syncValidatingAdmissionPolicyBinding(clusterId,
-                        (io.fabric8.kubernetes.api.model.admissionregistration.v1beta1.ValidatingAdmissionPolicyBinding) resource);
-                case "VolumeAttachments" -> k8sResourceSyncService.syncVolumeAttachment(clusterId,
-                        (io.fabric8.kubernetes.api.model.storage.VolumeAttachment) resource);
-                case "ReplicationControllers" -> k8sResourceSyncService.syncReplicationController(clusterId,
-                        (io.fabric8.kubernetes.api.model.ReplicationController) resource);
-                case "HPAs" -> k8sResourceSyncService.syncHpa(clusterId,
-                        (io.fabric8.kubernetes.api.model.autoscaling.v2.HorizontalPodAutoscaler) resource);
-                default -> log.warn("Sync not implemented for resource type: {}", resourceType);
-            }
         }
-    }
 
-    @PreDestroy
-    public void stopAllWatches() {
-        activeWatches.values().forEach(Watch::close);
-        executorService.shutdown();
-    }
+        // ── Functional interfaces for sync/delete callbacks ────────────────────
+
+        @FunctionalInterface
+        private interface SyncCallback {
+                void sync(Long clusterId, HasMetadata resource);
+        }
+
+        @FunctionalInterface
+        private interface DeleteCallback {
+                void delete(String uid);
+        }
+
+        // ── Generic informer registration ───────────────────────────────────────
+
+        private <T extends HasMetadata> void registerInformer(
+                        SharedInformerFactory factory, Long clusterId, String clusterName,
+                        String resourceType, Class<T> clazz,
+                        SyncCallback onSync, DeleteCallback onDelete,
+                        io.fabric8.kubernetes.client.dsl.Informable<T> informable) {
+
+                informable.inform(new ResourceEventHandler<T>() {
+                        @Override
+                        public void onAdd(T obj) {
+                                try {
+                                        log.info("Cluster {}: [ADD] {} {}", clusterName, resourceType,
+                                                        obj.getMetadata().getName());
+                                        onSync.sync(clusterId, obj);
+                                } catch (Exception e) {
+                                        log.error("Failed to sync [ADD] {} {} for cluster {}: {}",
+                                                        resourceType, obj.getMetadata().getName(), clusterName,
+                                                        e.getMessage());
+                                }
+                        }
+
+                        @Override
+                        public void onUpdate(T oldObj, T newObj) {
+                                // Skip if resourceVersion hasn't changed (no real update)
+                                if (oldObj.getMetadata().getResourceVersion()
+                                                .equals(newObj.getMetadata().getResourceVersion())) {
+                                        return;
+                                }
+                                try {
+                                        log.info("Cluster {}: [UPDATE] {} {}", clusterName, resourceType,
+                                                        newObj.getMetadata().getName());
+                                        onSync.sync(clusterId, newObj);
+                                } catch (Exception e) {
+                                        log.error("Failed to sync [UPDATE] {} {} for cluster {}: {}",
+                                                        resourceType, newObj.getMetadata().getName(), clusterName,
+                                                        e.getMessage());
+                                }
+                        }
+
+                        @Override
+                        public void onDelete(T obj, boolean deletedFinalStateUnknown) {
+                                try {
+                                        log.info("Cluster {}: [DELETE] {} {}", clusterName, resourceType,
+                                                        obj.getMetadata().getName());
+                                        onDelete.delete(obj.getMetadata().getUid());
+                                } catch (Exception e) {
+                                        log.error("Failed to sync [DELETE] {} {} for cluster {}: {}",
+                                                        resourceType, obj.getMetadata().getName(), clusterName,
+                                                        e.getMessage());
+                                }
+                        }
+                }, RESYNC_PERIOD_MS);
+
+                log.info("Registered {} informer for cluster '{}'", resourceType, clusterName);
+        }
+
+        /**
+         * Register informer for optional/alpha APIs — logs a warning if not available.
+         */
+        private <T extends HasMetadata> void tryRegisterInformer(
+                        SharedInformerFactory factory, Long clusterId, String clusterName,
+                        String resourceType, Class<T> clazz,
+                        SyncCallback onSync, DeleteCallback onDelete,
+                        io.fabric8.kubernetes.client.dsl.Informable<T> informable) {
+                try {
+                        registerInformer(factory, clusterId, clusterName, resourceType, clazz, onSync, onDelete,
+                                        informable);
+                } catch (Exception e) {
+                        log.warn("{} API not available for cluster {}: {}", resourceType, clusterName, e.getMessage());
+                }
+        }
+
+        /**
+         * Pod informer — same as generic but kept separate for clarity.
+         */
+        private void registerPodInformer(SharedInformerFactory factory, Long clusterId, String clusterName,
+                        KubernetesClient client) {
+                registerInformer(factory, clusterId, clusterName, "Pod",
+                                io.fabric8.kubernetes.api.model.Pod.class,
+                                (c, r) -> k8sResourceSyncService.syncPod(c, (io.fabric8.kubernetes.api.model.Pod) r),
+                                (uid) -> k8sResourceSyncService.markPodDeleted(uid),
+                                client.pods().inAnyNamespace());
+        }
+
+        /**
+         * NetworkPolicy informer — special delete handler needs clusterId + namespace +
+         * name.
+         */
+        private void registerNetworkPolicyInformer(SharedInformerFactory factory, Long clusterId, String clusterName,
+                        KubernetesClient client) {
+                client.network().v1().networkPolicies().inAnyNamespace().inform(
+                                new ResourceEventHandler<io.fabric8.kubernetes.api.model.networking.v1.NetworkPolicy>() {
+                                        @Override
+                                        public void onAdd(
+                                                        io.fabric8.kubernetes.api.model.networking.v1.NetworkPolicy obj) {
+                                                // NetworkPolicy sync is handled via generated network policies — no
+                                                // generic sync needed
+                                                log.debug("Cluster {}: [ADD] NetworkPolicy {}", clusterName,
+                                                                obj.getMetadata().getName());
+                                        }
+
+                                        @Override
+                                        public void onUpdate(
+                                                        io.fabric8.kubernetes.api.model.networking.v1.NetworkPolicy oldObj,
+                                                        io.fabric8.kubernetes.api.model.networking.v1.NetworkPolicy newObj) {
+                                                if (oldObj.getMetadata().getResourceVersion()
+                                                                .equals(newObj.getMetadata().getResourceVersion())) {
+                                                        return;
+                                                }
+                                                log.debug("Cluster {}: [UPDATE] NetworkPolicy {}", clusterName,
+                                                                newObj.getMetadata().getName());
+                                        }
+
+                                        @Override
+                                        public void onDelete(
+                                                        io.fabric8.kubernetes.api.model.networking.v1.NetworkPolicy obj,
+                                                        boolean deletedFinalStateUnknown) {
+                                                try {
+                                                        log.debug("Cluster {}: [DELETE] NetworkPolicy {}", clusterName,
+                                                                        obj.getMetadata().getName());
+                                                        k8sResourceSyncService.markGeneratedNetworkPolicyDeleted(
+                                                                        clusterId, obj.getMetadata().getNamespace(),
+                                                                        obj.getMetadata().getName());
+                                                } catch (Exception e) {
+                                                        log.error("Failed to sync [DELETE] NetworkPolicy {} for cluster {}: {}",
+                                                                        obj.getMetadata().getName(), clusterName,
+                                                                        e.getMessage());
+                                                }
+                                        }
+                                }, RESYNC_PERIOD_MS);
+
+                log.info("Registered NetworkPolicy informer for cluster '{}'", clusterName);
+        }
+
+        // ── Lifecycle ───────────────────────────────────────────────────────────
+
+        public void stopWatchersForCluster(String clusterUid) {
+                SharedInformerFactory factory = activeFactories.remove(clusterUid);
+                if (factory != null) {
+                        try {
+                                factory.stopAllRegisteredInformers();
+                                log.info("Stopped informer factory for cluster {}", clusterUid);
+                        } catch (Exception e) {
+                                log.warn("Error closing informer factory for cluster {}: {}", clusterUid,
+                                                e.getMessage());
+                        }
+                }
+        }
+
+        @PreDestroy
+        public void stopAllWatches() {
+                log.info("Shutting down all informer factories ({} clusters)", activeFactories.size());
+                activeFactories.forEach((uid, factory) -> {
+                        try {
+                                factory.stopAllRegisteredInformers();
+                        } catch (Exception e) {
+                                log.warn("Error closing informer factory for cluster {}: {}", uid, e.getMessage());
+                        }
+                });
+                activeFactories.clear();
+                log.info("All informer factories closed");
+        }
 }

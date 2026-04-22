@@ -54,7 +54,7 @@ services:
       - SUPERADMIN_PASSWORD=admin123
       - VULN_SCAN_PATH=trivy
       - VULN_SCAN_CACHE=/app/trivy-cache
-      - VULN_SCAN_CRON=0 * * * * *
+      - VULN_SCAN_CRON=0 0 * * * *
       - VULN_SCAN_TEMPLATE_PATH=/app/gitlab.tpl
       - VULN_SCAN_DB_REPO=ghcr.io/aquasecurity/trivy-db
       - VULN_SCAN_OFFLINE=true

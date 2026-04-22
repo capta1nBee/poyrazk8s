@@ -72,6 +72,18 @@
             <version>${fabric8.version}</version>
         </dependency>
 
+        <!-- BouncyCastle - required for EC key support in kubeconfig -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.78.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.78.1</version>
+        </dependency>
+
         <!-- Casbin RBAC -->
         <dependency>
             <groupId>org.casbin</groupId>
